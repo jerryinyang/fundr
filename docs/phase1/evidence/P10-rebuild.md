@@ -22,17 +22,36 @@ in part B once `lighter_formula.py` exists (Task 16 part B).
 - Inputs: `asset_ctxs` archive rows (1 row/coin/minute, per P1), filtered to the 5 sample coins.
   Old window: 5,760 rows/coin (4 full days at 1-min cadence) for ENA/ONDO/ETHFI/JUP; PONS has
   **0 rows in the old window** — expected, PONS was listed ~17 days before this run (P1/P8), long
-  after 2025-02-21..24. Recent window: 2,697 rows/coin for all 5 coins (less than the full
-  5,760 because the archive's newest day, 2026-09-18, is truncated at 09:55 UTC — P1 finding).
+  after 2025-02-21..24. Recent window: 2,697 rows/coin for all 5 coins — well short of the full
+  5,760, and **not just from the newest day's known truncation**. Per-day row counts (identical
+  for every one of the 5 sample coins; max possible per day is 1,440 at 1-min cadence), all
+  starting cleanly at `00:00:00` with no internal gaps > ~1 minute, and each simply stopping at
+  the listed last timestamp:
+
+  | day (2026) | rows | last timestamp (UTC) |
+  |---|---|---|
+  | 09-15 | 156/1440 | 02:35:00 |
+  | 09-16 | 505/1440 | 08:24:00 |
+  | 09-17 | 1,440/1440 | 23:59:00 (full day) |
+  | 09-18 | 596/1440 | 09:55:00 |
+
+  Only 09-18 is the "newest file, upload lag" case noted in P1. 09-15 and 09-16 are far more
+  incomplete than that and are **not** the newest file at download time — this looks like the
+  archive's recent daily files can be badly incomplete for reasons beyond simple upload lag
+  (hypothesis: backfill lag or an outage in whatever populates that day's file; not verified
+  against any Hyperliquid-side status source). See the added note in P1's evidence file. These
+  per-day gaps, not just the 09-18 truncation, are what strip most of the recent window down to
+  2,697 rows/coin before the completeness filter (which drops hours below 90% of expected samples).
 - Input cadence: median 60 s (1 row/coin/minute) — matches P1.
 - Formula's own sampling: every 5 s, averaged over the hour (P7, from HL docs; the 5 s samples
   themselves are not public).
 - **Cadence vs. formula: 60 s archive vs. 5 s formula sampling** → per the spec's P10 result rule,
   this makes an exact rebuild impossible by construction.
-- Baseline check: `settled == BASELINE_HOURLY` (exact float equality) matched 550/604 raw settled
-  rows before joining/filtering — a sensible count, so no tolerance-based fallback was needed.
-  After joining to hourly-averaged inputs and filtering low-count hours, 340/604 hours in the
-  final sample are baseline hours.
+- Baseline check: `settled == BASELINE_HOURLY` (exact float equality) matched 550/873 raw settled
+  rows (`st`, the full set fetched from `HLInfo().funding_history` before any join or
+  completeness filter) ≈ 63% — a sensible count, so no tolerance-based fallback was needed. After
+  joining to hourly-averaged premium inputs and filtering out low-count hours, a different,
+  smaller population remains: 604 coin-hours total, of which 340 are baseline hours.
 - Tolerance: one unit in the last reported decimal place of `fundingRate` = `1e-10` (same as P7).
 - Match rates (after joining coarse hourly-averaged premium to settled, 604 coin-hours total,
   hours with fewer than 90% of expected 1-min samples dropped):
