@@ -38,7 +38,37 @@ timestamp=1737108000  settle_time=2025-01-17 10:00:00  rate=0.0000  direction=lo
 - **Timestamp convention**: `timestamp` is Unix seconds, on the hour boundary (e.g. `1737100800` = `2025-01-17 08:00:00 UTC` exactly). Which side of the hour this settlement closes (start vs. end of the funding interval) is left to Task 12 per the brief.
 - **Units — `rate`**: `rate_str` values are always formatted to 4 decimal places (`reported_tolerance` = `0.0001` for every market), e.g. `"0.0012"`. Baseline-rate hours (where funding sits at the interest-rate floor, e.g. PONS's first row, ONDO's and ETHFI's early rows) report `rate=0.0012`. `order_book_details(231)` gives `base_interest_rate="0.0100"`; `0.0100 ÷ 8 = 0.00125`, which truncated (not rounded) to 4 dp is `0.0012` — matches exactly. This confirms `rate` is **percent per hour** (the interest-rate baseline is defined per-8h and divided by 8 to get the hourly rate), reported truncated to 4 decimal places.
 - **`value` field (tentative)**: for every row sampled, `value / rate` is roughly constant within a market over short windows and its scaled value (`value / rate × 100`) tracks a plausible spot price for that coin at that historical date (e.g. ENA ≈ 0.36–0.37, ONDO ≈ 0.92, ETHFI ≈ 1.18–1.19). This is consistent with `value = (rate/100) × mark_price`, i.e. `value` looks like the per-hour funding payment in quote currency per unit of the base asset, while `rate` is the dimensionless percent rate. Not independently verified against an authoritative price series — flagged as an inference, not a confirmed fact.
-- **Sign convention**: left as "pending Task 12" per the brief; `direction` (`long`/`short`) and `lighter_signed_rate()` are recorded in the parquet output but not validated here.
+- **Sign convention** — **verified in Task 12 (P9)**: none of the 7 P0 sample markets went
+  negative during the P9 live recording (11:27–16:54 UTC, 2026-09-19), so the check was extended
+  to all Lighter markets. `GET /api/v1/funding-rates` (live) showed market_id 212 (`CAP`) at
+  −0.003672. Its latest `/api/v1/fundings` row: `{timestamp: 1789858800, rate: "0.0478",
+  direction: "short"}` — `rate` is an unsigned magnitude, sign lives in `direction`. The live
+  `market_stats` websocket for the same market at the same settlement timestamp
+  (`funding_timestamp: 1789858800000`) reported `funding_rate: "-0.0478"` (already signed).
+  `lighter_signed_rate(0.0478, "short")` (this file's function, `rate if direction == "long" else
+  -rate`) = **−0.0478**, exactly matching the websocket's signed value. **Confirmed**:
+  `direction: "long"` → positive signed rate (longs pay shorts), `direction: "short"` → negative
+  signed rate (shorts pay longs) — the same convention as Hyperliquid (P4: positive `fundingRate`
+  → longs pay shorts). `lighter_signed_rate()` as already implemented is correct; no code change
+  needed. Full detail in `docs/phase1/evidence/P9-live-probe.md`, extra check (b).
+
+## Cross-venue normalisation (verified, Task 12)
+
+Both venues can be put on the same basis: **per-hour fraction, positive = longs pay shorts.**
+
+| | Hyperliquid | Lighter |
+|---|---|---|
+| Native settlement unit | fraction (dimensionless), per hour, from `fundingHistory.fundingRate` (P4) | percent, per hour, from `/fundings.rate` truncated to 4dp (this file) |
+| Sign as reported | signed directly (positive = longs pay, P4 §Units/sign, 245/245 data-checked) | unsigned magnitude + separate `direction` (`long`/`short`) |
+| Normalisation to common basis | used as-is (already a per-hour signed fraction) | `signed_rate = (rate / 100) if direction == "long" else -(rate / 100)`, i.e. divide the percent by 100 to get a fraction, then apply `lighter_signed_rate`'s sign rule (now on the fraction, not the percent, for the common basis — `lighter_signed_rate()` itself operates on whichever units `rate` is already in, so callers must divide by 100 before or after, consistently) |
+| Payment formula (for reference) | `position_size * oracle_price * funding_rate` (P7, oracle price) | `-position_i,j * index_j * fundingRate_j` (P7, index price) — note Lighter's formula's own sign convention already bakes in "positive funding × long position → payment," consistent with "positive = longs pay" once `signed_rate` is used |
+| Interval | 1 hour (both venues, P4/P5) | 1 hour (both venues, P4/P5) |
+
+Both venues' funding is expressible as a per-hour signed fraction with the same sign
+convention (positive = longs pay shorts, negative = shorts pay longs) once Lighter's `rate`
+(percent) is divided by 100 and signed via `direction` through `lighter_signed_rate()`. **The
+stop condition in Task 12's brief (HL and Lighter cannot be put on the same basis) does not
+apply** — normalisation is straightforward unit/sign conversion, not a structural mismatch.
 
 ## Status
 Verified — all claims above are backed by the printed probe output and the written parquet files.
@@ -47,4 +77,7 @@ Verified — all claims above are backed by the printed probe output and the wri
 - `1d` resolution's apparent short retention window (2 rows for a 30-day request) is unexplained; not investigated further since `1h` fully covers the need.
 - `count_back`'s behavior when no `start`/`end` range is given was not tested (the wrapper always sends a range).
 - `value` field's exact formula/units is inferred from price-ratio matching, not confirmed against an independent price source.
-- Sign convention (which side pays under `direction=long` vs `short`) is deferred to Task 12 as instructed.
+- The sign check above used a market outside the 7 P0 sample markets (all of which stayed positive
+  during the P9 recording window) and compared a REST `/fundings` row to a websocket message at
+  the matching settlement timestamp, not a fully atomic simultaneous read — see P9's evidence note
+  for the exact commands and numbers.
