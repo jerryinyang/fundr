@@ -3,8 +3,6 @@ import argparse
 import asyncio
 import time
 
-import websockets
-
 from fundr import store
 from fundr.sources.hl_api import HLInfo, asset_ctxs_frame
 from fundr.sources.lighter_api import LighterAPI, market_stats_stream
@@ -36,7 +34,7 @@ async def lighter_ws(stop: asyncio.Event):
     while not stop.is_set():
         try:
             await market_stats_stream(market_ids, on_stats, stop)
-        except (OSError, websockets.ConnectionClosed) as e:
+        except Exception as e:  # broad on purpose: a 4-hour run must survive any ws error, which is logged in the data
             write(venue="lighter", source="ws_reconnect", error=repr(e))
             await asyncio.sleep(5)
 
@@ -52,6 +50,12 @@ def poll_once():
         write(venue="lighter", source="orderBookDetails", **lighter.order_book_details(m))  # includes market_id
     rows = [r for r in lighter.funding_rates() if r["market_id"] in market_ids]
     write(venue="lighter", source="funding-rates", rows=rows)
+
+
+def write_ws_snapshot():
+    # Runs on the event loop (never concurrently with on_stats, which also runs on the
+    # event loop via the websocket receive path), so the snapshot-read + reset here can't
+    # race with a stats update landing in between.
     for m in market_ids:
         if m in latest:
             w = window[m]
@@ -69,6 +73,7 @@ async def main():
         started = time.time()
         try:
             await asyncio.to_thread(poll_once)
+            write_ws_snapshot()
         except Exception as e:  # one failed poll must not end a 4-hour run; it is logged and visible in the data
             write(venue="probe", source="poll_error", error=repr(e))
         await asyncio.sleep(max(0.0, 60 - (time.time() - started)))
