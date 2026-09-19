@@ -1,0 +1,53 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+
+**/data/*
+!data/README.md
+*.csv
+*.json
+# Phase 2 study artifacts are the record of a run and are committed on
+# purpose: every figure is drawn from them, and each carries the master
+# seed, toolchain and commit SHA that produced it. Narrow negation only --
+# the global *.json rule above stays.
+!src/projects/minerva/artifacts/phase2/
+!src/projects/minerva/artifacts/phase2/**/*.json
+!src/projects/arb/tests/fixtures/
+!src/projects/arb/tests/fixtures/**/*.json
+!src/projects/arb/go/**/testdata/
+!src/projects/arb/go/**/testdata/**/*.json
+# Figures are regenerated from those JSONs by py/plot_phase2.py; the JSON is
+# the record, the PNG is a rendering of it.
+src/projects/minerva/artifacts/phase2/figures/
+.ignore/
+temp/
+
+# Graphify tool state: caches and detection markers, regenerated on demand.
+graphify-out/
+# Machine-local symlink into the user's skill directory.
+.claude/skills
+
+# Local git worktrees
+.worktrees/
+auth/
+
+# Filled local env (the .example stays tracked)
+src/projects/arb/go/deploy/arb.env
+
+# Deploy simulation (binary + real env)
+envs/
+
+# Subagent-driven-development scratch (ledger, briefs, reviews).
+.superpowers/
+
+# fundr test fixtures are small trimmed samples and are committed.
+!tests/fixtures/
+!tests/fixtures/**
