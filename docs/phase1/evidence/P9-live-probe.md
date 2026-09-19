@@ -72,9 +72,9 @@ to all Lighter markets:
   which returns `-rate` for `direction == "short"`) = **−0.0478**, which equals the websocket's
   signed `funding_rate` (−0.0478) exactly, at the same settlement timestamp
   (`1789858800 * 1000 == 1789858800000`).
-- **Sign convention confirmed**: `direction: "short"` means shorts are the side receiving payment
-  (the rate is negative — longs receive, shorts pay under Lighter's own payment-formula sign, see
-  P5 update below for the full statement), matching the codebase's existing
+- **Sign convention confirmed**: `direction: "short"` means shorts pay longs (the signed rate is
+  negative), and `direction: "long"` means longs pay shorts (signed rate positive) — the same
+  sense as Hyperliquid's convention (P4) and as P5 states it, matching the codebase's existing
   `lighter_signed_rate` assumption exactly. This was previously "pending Task 12" (P5, P7); it is
   now verified against live data at a real negative-rate market, not just inferred.
 
@@ -116,25 +116,42 @@ the closing settlement, tolerance `1e-10` per P4/P7):
   estimate of the upcoming settlement, useful prospectively, but not a source of exact historical
   settled values (P5/P10's settled-history endpoint remains the source of truth for that).
 
-### Lighter: current funding equals the completed settlement exactly — it is the LAST settled rate, not a forward estimate of the next one
+### Lighter: current_funding_rate is a running estimate of the currently-accruing interval, and it converges to be identical to the settlement that closes that interval
+- **Settlement-timestamp convention (checked directly against the live API)**: a `/fundings` row
+  timestamped `T` reports the interval that just ended at `T` — i.e. it covers `[T-1h, T)`.
+  Checked 2026-09-19 ~23:53:58 UTC (market_id 1): the latest available row was timestamped
+  `2026-09-19 23:00:00 UTC`, i.e. the settlement for the interval `[22:00, 23:00)` that had
+  already closed, with no row yet for the interval `[23:00, 00:00)` still in progress at request
+  time. This means the `settle_time = hour + 1h` convention this probe's `attach_settled` call
+  uses for "closing settlement" pairs each hour's profiled samples with the settlement of *that
+  same hour* (the interval `[hour, hour+1h)`), not with some later, future settlement.
 - `current_funding_rate` moves within the hour on 61.9% of fully-observed hours (13/21) — the
-  value visibly changes minute to minute.
-- Despite that, the **last in-hour value always exactly equals the settlement that closes that
-  hour** (21/21 = 100%, and 11/11 = 100% restricted to hours where the rate genuinely changed —
-  not a baseline artifact). It also equals the settlement that *opened* that hour on the
-  `funding_rate` field (21/21), consistent with NautilusTrader's documented mapping quoted in P7:
-  `current_funding_rate` = the upcoming/most-recently-computed estimate that becomes final at the
-  hour boundary, `funding_rate`/`funding_timestamp` = the last *completed* settlement.
-- Because `current_funding_rate`'s value at the instant just before an hour closes is bit-identical
-  to what then gets recorded as that hour's settled rate (P5's `/fundings`), the live field is
-  effectively announcing the settlement slightly before/at the moment it becomes official — i.e.
-  it behaves as a converging *and exactly matching* running value, unlike HL's approximate
-  convergence.
+  value visibly changes minute to minute while the interval it belongs to is still open.
+- The **last in-hour value always exactly equals the settlement that closes that same hour**
+  (21/21 = 100%, and 11/11 = 100% restricted to hours where the rate genuinely changed — not a
+  baseline artifact). Given the timestamp convention above, this means: while an hourly interval
+  is still accruing (has not yet closed), `current_funding_rate` is already tracking toward — and,
+  by the last poll before the boundary, exactly matching — the value that interval will settle at.
+  It is **not** a stale record of an already-completed settlement, and it is **not** a forecast of
+  some *future* interval beyond the current one.
+- `funding_rate` + `funding_timestamp` instead match the settlement that *opened* the profiled hour
+  (21/21) — i.e. they hold the last *already-completed* settlement, one interval behind
+  `current_funding_rate`. This is consistent with NautilusTrader's documented mapping quoted in
+  P7: `current_funding_rate` = the running estimate of the upcoming/currently-accruing interval,
+  `funding_rate`/`funding_timestamp` = the last completed payment.
+- Because `current_funding_rate`'s value at the instant just before its interval closes is
+  bit-identical to what then gets recorded as that interval's settled rate (P5's `/fundings`), the
+  live field behaves as a running value that **converges to and exactly matches** the settlement
+  about to become official — unlike HL's approximate convergence, which never exactly matches
+  off-baseline.
 - **For the Target C decision rule, condition (b) holds for Lighter on this evidence** (100% match,
   both on the full sample and the informative subset) — marked **interim** per the brief: this
   probe used the live `market_stats` websocket and the `/fundings` REST endpoint as the settled
-  source, not 0xArchive; the 0xArchive comparison (a separate task) can still change which source
-  Phase 2 uses even if it doesn't change this reading of what the *field itself* means.
+  source, not an archived one. Target C's Outcome A specifically requires an *archived* source
+  that holds intra-hour current funding; this live-only check establishes what the field means but
+  does not by itself establish an archived source with the same property. The 0xArchive comparison
+  (a separate task) is what tests that, and can still change which source Phase 2 uses even though
+  it is not expected to change this reading of what the *field itself* means.
 
 ### What each field means (confirmed by data, not just docs)
 - HL `funding` (from `metaAndAssetCtxs`/archive): continuously-updated running average premium
@@ -142,11 +159,14 @@ the closing settlement, tolerance `1e-10` per P4/P7):
 - HL `predictedFundings`: HL's own forward-looking predicted rate for the *next* settlement, plus
   `nextFundingTime`/`fundingIntervalHours`, for HL and other tracked venues (P4). Sampled again
   here; unchanged reading.
-- Lighter `current_funding_rate` (ws `market_stats`): the running in-hour estimate that becomes
-  the next completed settlement — confirmed identical to it at the hour boundary.
-- Lighter `funding_rate` + `funding_timestamp` (ws `market_stats`): the last *completed*
-  settlement and when it happened — confirmed identical to the settlement opening the current
-  profiled hour.
+- Lighter `current_funding_rate` (ws `market_stats`): a running estimate of the funding for the
+  currently-accruing (not-yet-closed) interval — confirmed to become bit-identical to that
+  interval's settlement at the hour boundary.
+- Lighter `funding_rate` + `funding_timestamp` (ws `market_stats`): the last *already-completed*
+  settlement (one interval behind `current_funding_rate`) and when it closed — confirmed identical
+  to the settlement that opened the current profiled hour. (`/fundings` rows follow the same
+  convention: a row timestamped `T` covers `[T-1h, T)`, confirmed directly against the live API —
+  see the Lighter section above.)
 - `/funding-rates` (REST, both `/funding-rates` endpoint queried live and each venue's field):
   aggregates current rates across `binance, bybit, hyperliquid, lighter` for cross-venue
   comparison; Lighter's entries here report the *signed* rate directly (unlike `/fundings`, which
@@ -214,9 +234,10 @@ empty-frame errors.
   1-minute data) that the gap persists and correlates negatively with time-into-hour, but does not
   identify its exact source (still consistent with "true 5-second TWAP vs ~60s polling" from P4).
 - Lighter's Target C reading is interim pending the 0xArchive comparison (next task) — this note's
-  live-source reading (current_funding_rate = running value, exactly equal to the next completed
-  settlement) is not expected to change, but which *archived* source Phase 2 should actually read
-  from could.
+  live-source reading (`current_funding_rate` = running estimate of the currently-accruing
+  interval, exactly equal to that interval's settlement at the boundary) is not expected to
+  change, but Outcome A also requires an *archived* source with the same property, which this
+  probe does not test; which source Phase 2 should actually read from could still change.
 - The cross-venue `/funding-rates` sign check for Lighter (market 212) used two calls a few
   seconds apart (REST snapshot vs. websocket), not one atomic read; sign and rough magnitude
   agree, but this is not as tight a check as the `/fundings`-vs-websocket comparison, which used
