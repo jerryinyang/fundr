@@ -1,6 +1,7 @@
 import json
 
 import httpx
+import polars as pl
 
 from fundr.sources import hl_api
 
@@ -46,3 +47,10 @@ def test_funding_history_frame_truncates_settle_time():
     assert row["funding_rate"] == 0.0000125
     assert row["funding_rate_str"] == "0.0000125"
     assert row["settle_time"].minute == 0 and row["settle_time"].second == 0
+
+
+def test_funding_history_frame_settle_time_is_ms_precision():
+    df = hl_api.funding_history_frame(
+        [{"coin": "ETH", "fundingRate": "0.0000125", "premium": "0.0001", "time": 1735689600054}]
+    )
+    assert df.schema["settle_time"] == pl.Datetime("ms")

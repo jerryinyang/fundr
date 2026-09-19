@@ -61,6 +61,12 @@ def test_rebuild_verdict_near_miss_and_fail():
     assert a.rebuild_verdict(bad, settled, baseline, 1e-7)["verdict"] == "fail"
 
 
+def test_epoch_ms_and_epoch_s_return_ms_dtype():
+    df = pl.DataFrame({"ms": [1735689600054], "s": [1735689600]})
+    assert df.select(a.epoch_ms("ms")).schema["ms"] == pl.Datetime("ms")
+    assert df.select(a.epoch_s("s")).schema["s"] == pl.Datetime("ms")
+
+
 def test_attach_settled_pairs_hour_with_next_settlement():
     prof = a.hourly_profile(_df(), "t", "coin", ["funding"])
     settled = pl.DataFrame(

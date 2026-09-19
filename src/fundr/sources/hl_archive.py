@@ -96,5 +96,5 @@ def parse_time(df: pl.DataFrame) -> pl.DataFrame:
         # Real archive format observed in P1: "2023-05-20T02:50:04Z" (whole-second UTC, always 20 chars).
         return df.with_columns(pl.col("time").str.to_datetime("%Y-%m-%dT%H:%M:%SZ", time_unit="ms"))
     if dtype.is_integer():
-        return df.with_columns(pl.from_epoch("time", time_unit="ms"))
+        return df.with_columns(pl.from_epoch("time", time_unit="ms").dt.cast_time_unit("ms"))
     raise ValueError(f"unexpected time dtype {dtype}; inspect and extend parse_time")

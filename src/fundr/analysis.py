@@ -6,11 +6,11 @@ import polars as pl
 
 
 def epoch_ms(col: str) -> pl.Expr:
-    return pl.from_epoch(pl.col(col), time_unit="ms")
+    return pl.from_epoch(pl.col(col), time_unit="ms").dt.cast_time_unit("ms")
 
 
 def epoch_s(col: str) -> pl.Expr:
-    return pl.from_epoch(pl.col(col) * 1000, time_unit="ms")
+    return pl.from_epoch(pl.col(col) * 1000, time_unit="ms").dt.cast_time_unit("ms")
 
 
 def hourly_profile(df: pl.DataFrame, time_col: str, key_col: str, value_cols: list[str]) -> pl.DataFrame:

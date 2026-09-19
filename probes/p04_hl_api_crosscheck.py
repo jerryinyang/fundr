@@ -27,11 +27,7 @@ for label, key in dates.items():
     settled.write_parquet(store.probe_dir("p04") / f"settled_{day}.parquet")
     tol = reported_tolerance(settled["funding_rate_str"].to_list())
     prof = pl.read_parquet(store.probe_dir("p01") / f"profile_{day}.parquet")
-    # funding_history_frame's settle_time is us-precision (from_epoch default); P1's profile
-    # parquet stores "hour" as ms-precision. Cast to ms so the join keys' dtypes match.
-    s = settled.select(
-        "coin", pl.col("settle_time").dt.cast_time_unit("ms"), pl.col("funding_rate").alias("settled")
-    )
+    s = settled.select("coin", "settle_time", pl.col("funding_rate").alias("settled"))
     print(f"\n=== {label} {day}: {settled.height} settled rows, tolerance {tol:g}")
     # Alignment A: last archived value in hour H vs the settlement that closes H (H+1h).
     a = attach_settled(prof, s, "coin").drop_nulls("settled")
