@@ -87,3 +87,14 @@ def decode_lz4(path: Path) -> bytes:
 
 def read_csv_lz4(path: Path) -> pl.DataFrame:
     return pl.read_csv(io.BytesIO(decode_lz4(path)), infer_schema_length=10000)
+
+
+def parse_time(df: pl.DataFrame) -> pl.DataFrame:
+    """asset_ctxs `time` column → Datetime(ms), naive UTC. Extend here if P1 finds another format."""
+    dtype = df.schema["time"]
+    if dtype == pl.String:
+        # Real archive format observed in P1: "2023-05-20T02:50:04Z" (whole-second UTC, always 20 chars).
+        return df.with_columns(pl.col("time").str.to_datetime("%Y-%m-%dT%H:%M:%SZ", time_unit="ms"))
+    if dtype.is_integer():
+        return df.with_columns(pl.from_epoch("time", time_unit="ms"))
+    raise ValueError(f"unexpected time dtype {dtype}; inspect and extend parse_time")
