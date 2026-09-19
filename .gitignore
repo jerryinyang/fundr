@@ -51,3 +51,6 @@ envs/
 # fundr test fixtures are small trimmed samples and are committed.
 !tests/fixtures/
 !tests/fixtures/**
+
+# Local secrets (0xArchive key, wallet keys).
+.env
