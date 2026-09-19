@@ -32,3 +32,4 @@ Status: verified
 
 ## Open issues
 - HL `k*` vs Lighter `1000*` symbol naming mismatch (e.g. `kPEPE` / `1000PEPE`) means those markets are silently excluded from the both-venues candidate set. Not fixed by alias logic per brief instruction; flagged here as a known gap in cross-venue symbol matching that could matter later if these markets are needed.
+- Controller ruling (Task 9 follow-up): P1 found PONS (listed ~17 days before the P1 run) missing on the archive dates it otherwise needed for intra-hour analysis. Ruling was to keep this fixed 7-coin sample everywhere (no swap) and instead re-choose P1's `old`/`mid` archive dates around the sample; PONS is present only on P1's `recent` date. See `docs/phase1/evidence/P1-hl-asset-ctxs.md` for detail.
