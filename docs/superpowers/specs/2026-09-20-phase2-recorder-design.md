@@ -1,6 +1,8 @@
 # Phase 2a — The Always-On Funding Recorder: Design
 
-Date: 2026-09-20 (revised the same day after an independent review; see *Review corrections*)
+Date: 2026-09-20 (revised the same day after an independent review; revised again 2026-09-21 after
+a final review of the implementation plan — see *Review corrections* and *Review corrections,
+second round*)
 Parent: `docs/funding_research_design.md` (Phase 2)
 Predecessor: `docs/phase1/handoff.md` (§4 "The recorder Phase 2 must build")
 
@@ -70,8 +72,10 @@ therefore writes a Lighter record when **any** of these occurs:
 1. `premium` or `current_funding_rate` changes value for that market (event-driven — never miss a
    distinct value);
 2. a 60-second heartbeat elapses (so a quiet market still proves the feed is alive);
-3. **the hour is about to close** — a forced snapshot of every market at `HH:59:45` and again at
-   `HH:59:57`, which is what guarantees the last pre-settlement reading is on disk.
+3. **the hour is about to close** — a forced snapshot of every market at `HH:59:30` and again at
+   `HH:59:52`, which is what guarantees the last pre-settlement reading is on disk. (Originally
+   `HH:59:45`/`HH:59:57`; 3 seconds leaves no margin for clock skew, and a fast clock would file
+   the hour's single most important record into the *next* hour's partition.)
 
 Each record carries the message counter and a separate counter of how many times those two fields
 changed in the interval.
@@ -101,7 +105,9 @@ src/fundr/recorder/
     universe.py       # both venues' market lists + Lighter funding parameters
   upload.py       # S3 sync; its own entrypoint, run on a timer
 deploy/
-  fundr-recorder.service   # systemd: Restart=always, RestartSec=10, StartLimitIntervalSec=0
+  fundr-recorder.service   # systemd: [Service] Restart=always/RestartSec=10,
+                           #          [Unit] StartLimitIntervalSec=0 (it is a Unit directive;
+                           #          in [Service] systemd ignores it and keeps the default)
   fundr-upload.service / .timer
   bootstrap.sh             # instance setup from a clean AMI, incl. chrony time sync
 tests/recorder/            # offline tests with fake feeds
@@ -116,21 +122,33 @@ new code (the probe's is what failed in Phase 1, and the handoff says not to ado
 
 ```json
 {"t_ms": 1789812743255, "mono_ns": 81234567890, "feed": "lighter_state", "venue": "lighter",
- "seq": 41822, "rec_ver": "2a.1", "git_sha": "abc1234",
+ "seq": 41822, "run_id": "3f2b...", "rec_ver": "2a.1", "git_sha": "abc1234",
  "n_msgs": 47, "n_funding_changes": 1, "trigger": "boundary", "stale": false,
+ "age_ms": 12000, "ws_ts": 1789812741, "ws_type": "update/market_stats",
  "payload": { ... exactly as received ... }}
 ```
 
 - `t_ms` wall clock, `mono_ns` monotonic — the pair distinguishes an NTP step from host suspension
   (requirement 4 would otherwise false-positive on every clock correction).
 - `seq` monotonic per feed, **including on gap records**, so a missing record is always detectable.
+- `run_id` — a uuid4 minted once per process. `seq` restarts at 1 on every process start, so
+  without it a restart is indistinguishable from a lost block of records: group on `run_id` first,
+  then look for holes in `seq`.
 - `rec_ver` / `git_sha` — provenance, which the parent design requires of every dataset.
 - `trigger` — `change | heartbeat | boundary`, so analysis can tell why a row exists.
-- Gap records: `{"t_ms", "mono_ns", "feed", "seq", "type": "gap", "from_ms", "to_ms", "reason"}`.
+- `age_ms` — how old the captured values were when the record was written, per market. A snapshot
+  is never written as if fresh; a stale one carries its real age and `stale: true`.
+- `ws_ts` / `ws_type` — the venue's own message timestamp and type. Capture-time-only data; the
+  venue's stamp is not recoverable later.
+- Gap records: `{"t_ms", "mono_ns", "feed", "seq", "run_id", "type": "gap", "from_ms", "to_ms",
+  "reason"}`.
 
 Files: `<feed>/date=YYYY-MM-DD/hour=HH/<feed>-<instance-id>-<hour>.jsonl.gz`, identical locally and
-in S3 under `recorder/v1/`. Hourly parts are immutable once closed, so an upload never rewrites a
-file it has already stored.
+in S3 under `recorder/v1/`. The **instance id** (`FUNDR_INSTANCE_ID`, defaulting to the hostname)
+is not optional: without it two recorders sharing the bucket collide on one key. An hourly part is
+appended to while its hour is open and is immutable once closed; because gzip members concatenate
+and each flush closes a complete member, the open part is a valid readable file at all times and
+is uploaded along with the closed ones.
 
 ## The five requirements, and the mechanism for each
 
@@ -138,8 +156,12 @@ From [P9](../../phase1/evidence/P9-live-probe.md), all produced by Phase 1's own
 
 1. **Never gate feed recording on a REST poll.** Each task owns its timer, connection and file, and
    all I/O is async so no call can block another task's loop. Tested explicitly (see Testing).
-2. **Detect a stalled feed.** Two consecutive zero-`n_msgs` intervals force a reconnect; snapshots
-   are marked `stale` until traffic resumes. A stale value is never written as fresh.
+2. **Detect a stalled feed.** Two consecutive zero-`n_msgs` **heartbeat** intervals force a
+   reconnect — heartbeats only, because the two boundary snapshots are 22 seconds apart and
+   counting them as intervals would trip the rule at every hour boundary. A stale value is never
+   written as fresh: freshness is tracked **per market** (one busy market must not make 245 silent
+   ones look alive), every record carries `age_ms`, and anything older than two heartbeat
+   intervals is `stale: true`.
 3. **Enforce timeouts out-of-band.** Every call runs under `asyncio.wait_for` — which is only
    effective because the calls are genuinely async. A client-level 30 s timeout failed to bound an
    84-minute read in Phase 1. A timeout writes a gap record; the loop continues.
@@ -147,14 +169,26 @@ From [P9](../../phase1/evidence/P9-live-probe.md), all produced by Phase 1's own
    intervals is host suspension or a hang, a wall-clock-only jump is a time correction. Both are
    written as gap records naming which.
 5. **Alert on coverage, not counts.** `health.json`, rewritten every minute and uploaded with the
-   data, carries `status` plus per-feed, per-market expected-vs-received counts, last message time,
-   reconnect count and open gaps. Phase 1's lost hour was a 0.4% count difference — invisible to
-   any count-based check.
+   data **on every upload cycle**, carries `status` plus per-feed, per-market expected-vs-received
+   counts, last message time, reconnect count and open gaps. Phase 1's lost hour was a 0.4% count
+   difference — invisible to any count-based check. Coverage counts **venue** events, never the
+   recorder's own timer: counting our own writes gives a market whose subscription died silently a
+   perfect score forever. Expected counts come from the universe feed's active market list, so a
+   listed-but-never-heard-from market has an entry reading zero rather than no entry at all.
 
 **`status` thresholds** (so the field is testable): `ok` = every active market ≥ 95% of expected
 snapshots in the last hour, no open gap older than 5 minutes, both feeds reconnected < 5 times in
 the hour. `degraded` = any market between 50% and 95%, or an open gap under 30 minutes.
 `broken` = any feed below 50%, an open gap over 30 minutes, or no write in 5 minutes.
+
+**"In the last hour" means a trailing 60-minute window, prorated.** Read as the *calendar* hour it
+is unimplementable: a feed expecting 60 snapshots an hour scores 1/60 = 1.7% one minute past
+`HH:00` and reads `broken` until roughly `HH:30`, every hour, so the Done-when criterion of seven
+consecutive days at `ok` could never be met. Coverage is therefore judged over the trailing 60
+minutes, with each market's expectation scaled by how much of that window has elapsed since the
+market was first seen; a market younger than one prorated expected event is reported but not
+judged. All of this runs off a single, never-decreasing clock reading — a shared counter that can
+roll backwards wipes live coverage whenever a record lands on the wrong side of a boundary.
 
 Restart policy: systemd restarts the process on crash and on boot, with `RestartSec=10` and
 `StartLimitIntervalSec=0` so it can never exhaust a start limit and stay dead — the failure mode
@@ -172,11 +206,17 @@ dies without taking the others down.
   storage) and a **noncurrent-version expiry (7 days)** — without the second rule, versioning plus
   frequent uploads accumulates noncurrent copies indefinitely.
 - Uploads every 10 minutes; each hourly part is closed and fsynced before upload, so what lands in
-  S3 is always a complete, readable file. Local files deleted after 7 days once confirmed in S3.
+  S3 is always a complete, readable file. The **current** hour's part and `health.json` go up on
+  every cycle too — skipping the open hour would put up to ~70 minutes of data at risk on instance
+  loss, and `health.json` is the only thing the no-alerting decision leaves visible from outside.
+  Local files deleted after 7 days once confirmed in S3.
 - **Cost, stated honestly: ~$8–10/month.** Instance ~$6.13, public IPv4 ~$3.60/month (charged since
   2024, and required unless one pays ~$30/month for VPC interface endpoints — so Session Manager is
-  not free either way), disk ~$0.64, S3 and requests under $1. Volume ~700k rows/day, ~30 MB
-  compressed.
+  not free either way), disk ~$0.64, S3 and requests under $1. **Volume ~1M+ rows/day, ~40–50 MB
+  compressed** (the earlier ~700k was too low: Hyperliquid alone is 234 markets × 1440 polls =
+  337k, and Lighter contributes ~246 markets × 60 heartbeats = 354k plus one record per
+  premium/rate change plus two boundary records per market per hour, ~12k more). S3 costs are
+  unaffected at this scale; the number matters for disk headroom and for sizing the backfill.
 
 ## Testing
 
@@ -261,3 +301,44 @@ recorder exists to capture. All are addressed above; recorded here so the reason
 Still outstanding from [handoff §8 action 1](../../phase1/handoff.md), and made step one of
 provisioning: copy `data/phase1/p09/live.jsonl` — the only Lighter premium history in existence —
 into the new bucket.
+
+## Review corrections, second round
+
+A final review of the implementation plan (`docs/superpowers/plans/2026-09-20-phase2a-recorder.md`)
+found defects that reach back into this document. Recorded here so the reasoning survives:
+
+1. **"≥ 95% of expected snapshots in the last hour" was unimplementable as written.** Read as the
+   calendar hour it scores every feed `broken` for the first ~30 minutes of every hour, so seven
+   consecutive days at `ok` could never happen. Now defined as a **trailing 60-minute window with
+   prorated expectations**, off a single never-decreasing clock reading. See *The five
+   requirements*, item 5.
+2. **Boundary offsets moved from `HH:59:45`/`HH:59:57` to `HH:59:30`/`HH:59:52`.** Three seconds
+   leaves no margin for clock skew, and a fast clock would write the hour's critical record into
+   the next hour's partition — losing exactly the value the whole design exists to capture.
+3. **The two-interval silence rule is scoped to heartbeat intervals.** The 22-second gap between
+   the boundary snapshots would otherwise force a reconnect at every hour boundary.
+4. **Staleness is per market, with `age_ms` on every record.** A single global silence counter let
+   one active market mask every silent one, and reconnects wrote stale values as fresh.
+5. **The envelope gained `run_id`.** `seq` restarts at 1 on every process start, so gap detection
+   across a restart was impossible; `run_id` partitions the sequence.
+6. **The instance id in filenames is mandatory, not decorative** — two instances would otherwise
+   overwrite each other on the same S3 key.
+7. **Coverage counts venue events and expectations come from the universe feed.** Counting the
+   recorder's own writes gave a dead subscription a perfect score, and a listed-but-silent market
+   had no health entry at all. This is what the Done-when clause already required.
+8. **The venue's own message timestamp is captured** (`ws_ts`/`ws_type`). Keeping only
+   `market_stats` discarded capture-time-only data permanently.
+9. **`health.json` and the current hour's part are uploaded every cycle.** `health.json` was never
+   uploaded at all despite the Done-when requiring it in S3, and skipping the open hour made
+   "instance loss bounded to minutes" untrue by up to ~70 minutes.
+10. **Volume estimate corrected** from ~700k to ~1M+ rows/day; the old figure did not add up
+    against 234 HL markets × 1440 polls alone.
+11. **`StartLimitIntervalSec=0` belongs in `[Unit]`.** In `[Service]` systemd ignores it and keeps
+    the default start limit — the setting read as present while doing nothing, which is the one
+    failure the no-alerting choice cannot survive.
+12. **`funding_premium_multiplier` is in hundredths** (live: `100` on 137 markets, `50` on 96, `1`
+    on 2; P7 confirmed `100` means 1.0). The recorder stores it raw; Phase 4 divides once. Noted so
+    it is not scaled twice — and the 98 non-1.0 markets answer Phase 1's open question directly.
+13. **The repository had no remote**, so `bootstrap.sh`'s clone could never have run. Now: a
+    private GitHub repo with a read-only deploy key, and configuration passed to the bootstrap
+    through the user-data environment rather than positional arguments user-data cannot supply.
