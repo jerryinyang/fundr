@@ -34,5 +34,11 @@ def _trunc4(x: pl.Expr) -> pl.Expr:
 
 def hourly_rate(p: pl.Expr, interest: float, clamp_small: float, clamp_big: float, multiplier: float) -> pl.Expr:
     small_clamped = p + (interest - p).clip(-clamp_small, clamp_small)
+    # Big clamp applied BEFORE the /8, not after. This deliberately differs from the task-16
+    # brief's Step 4 snippet (which clamps after /8); it follows P7's confirmed formula
+    # (docs/phase1/evidence/P7-funding-formulas.md: "the big clamp is applied before the /8,
+    # unlike HL's cap which is applied after"). Untested on real settled data (P7 "Open
+    # issues": the clamp never binds in the P7 sample), so this ordering is a documented
+    # inference from the docs, not a data-confirmed fact — see the clamp-ordering test below.
     f8 = small_clamped.clip(-clamp_big, clamp_big)
     return _trunc4(f8 / 8)

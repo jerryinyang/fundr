@@ -42,3 +42,14 @@ def test_lighter_matches_real_settled_hours():
     rebuilt = df.select(lighter_formula.hourly_rate(pl.col("premium"), **LIGHTER_PARAMS))["premium"]
     stats = match_stats(rebuilt, df["settled"], reported_tolerance(df["settled_str"].to_list()))
     assert stats["n_match"] == stats["n"]
+
+
+def test_lighter_big_clamp_applies_before_div8():
+    # P7-confirmed ordering: clamp(smallClamped, -4, +4) / 8, NOT smallClamped / 8 then clamp.
+    # p=8.05 -> smallClamped = 8.05 + clamp(0.01 - 8.05, -0.05, +0.05) = 8.05 - 0.05 = 8.0.
+    # clamp-then-/8 (confirmed):    trunc4(clamp(8.0, -4, 4) / 8) = trunc4(4.0 / 8) = 0.5
+    # /8-then-clamp (brief's snippet, wrong): trunc4(clamp(8.0 / 8, -4, 4)) = trunc4(1.0) = 1.0
+    # The fixture never exercises the clamp (P7 "Open issues"), so this synthetic case is the
+    # only regression guard for the ordering.
+    out = pl.DataFrame({"p": [8.05]}).select(lighter_formula.hourly_rate(pl.col("p"), **LIGHTER_PARAMS))["p"]
+    assert out[0] == pytest.approx(0.5, abs=1e-9)

@@ -175,18 +175,23 @@ input and stops.
   "reason": "No historical Lighter premium input exists to rebuild from. 0xArchive's REST Lighter funding route (/v1/lighter/funding/{coin}) has no premium field (P8) -- confirmed live here: sample keys were ['coin', 'funding_rate', 'symbol', 'timestamp']. Lighter's own API has no native historical premium series either (P6: no premium/index-price-history endpoint to derive one from). The only Lighter premium data that exists anywhere is the ~3h52m P9 live websocket recording, which is far short of the two 4-day archive windows this probe needs and is not a substitute for an archive.",
   "missing_input": "historical Lighter premium",
   "checked": {"path": "/v1/lighter/funding/ENA", "sample_keys": ["coin", "funding_rate", "symbol", "timestamp"]},
+  "raw_verdict": null,
   "input_cadence": null,
   "all": null,
   "off_baseline": null,
   "tol": null,
   "windows": [
-    ["2026-08-22T00:39:56.914", "2026-08-26T00:39:56.914"],
-    ["2026-09-14T00:39:56.914", "2026-09-18T00:39:56.914"]
+    ["2026-08-22T00:46:51.352", "2026-08-26T00:46:51.352"],
+    ["2026-09-14T00:46:51.352", "2026-09-18T00:46:51.352"]
   ]
 }
 ```
-Saved at `data/phase1/p10/verdict_lighter.json`. No rebuild statistics (`all`, `off_baseline`,
-`tol`, `input_cadence`) exist because the pipeline never ran past the input check.
+Saved at `data/phase1/p10/verdict_lighter.json`. Carries the same key set as `verdict_hl.json`
+(including `raw_verdict`, for a uniform schema across venues) plus extra diagnostic keys
+(`reason`, `missing_input`, `checked`). Unlike HL's `raw_verdict: "fail"` (a rebuild ran and
+failed), Lighter's `raw_verdict` is `null` — no rebuild ever ran, so there is no raw result to
+report. No rebuild statistics (`all`, `off_baseline`, `tol`, `input_cadence`) exist because the
+pipeline never ran past the input check.
 
 ### What would be needed to attempt this later
 A **prospective recorder** capturing Lighter's `market_stats` websocket `premium` field (the

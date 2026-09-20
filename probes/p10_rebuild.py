@@ -103,6 +103,7 @@ else:
             "missing_input": "historical Lighter premium",
             "checked": {"path": f"/v1/lighter/funding/{probe_coin}",
                         "sample_keys": sorted(probe_rows[0].keys()) if probe_rows else []},
+            "raw_verdict": None,  # no rebuild ever ran (unlike HL's "fail"); nothing to report
             "input_cadence": None,
             "all": None,
             "off_baseline": None,
