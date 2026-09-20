@@ -38,9 +38,14 @@ def test_lighter_baseline():
 
 
 def test_lighter_matches_real_settled_hours():
+    # Tolerance is deliberately much tighter than reported_tolerance() (1e-4 for Lighter's 4dp
+    # format): at 1e-4, an un-truncated variant (e.g. round4, which differs from trunc4 by at
+    # most one reported unit) would also pass, defeating the point of this regression guard.
+    # P7 measured trunc4's mean signed error at 2.4e-19, so 1e-9 is a strict guard on truncation
+    # specifically, not just on reported precision.
     df = _cases("lighter_formula_cases.json")
     rebuilt = df.select(lighter_formula.hourly_rate(pl.col("premium"), **LIGHTER_PARAMS))["premium"]
-    stats = match_stats(rebuilt, df["settled"], reported_tolerance(df["settled_str"].to_list()))
+    stats = match_stats(rebuilt, df["settled"], 1e-9)
     assert stats["n_match"] == stats["n"]
 
 

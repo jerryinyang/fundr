@@ -6,14 +6,8 @@ import polars as pl
 
 from fundr import store
 from fundr.analysis import match_stats, reported_tolerance
-
-INTEREST_8H, CLAMP, CAP_HOURLY, BASELINE = 0.0001, 0.0005, 0.04, 0.0000125
-
-
-def candidate(p: pl.Expr) -> pl.Expr:
-    f8 = p + (INTEREST_8H - p).clip(-CLAMP, CLAMP)
-    return (f8 / 8).clip(-CAP_HOURLY, CAP_HOURLY)
-
+from fundr.funding.hl_formula import BASELINE_HOURLY as BASELINE
+from fundr.funding.hl_formula import hourly_rate as candidate
 
 df = pl.concat([pl.read_parquet(p) for p in sorted(store.probe_dir("p04").glob("settled_*.parquet"))])
 df = df.with_columns(candidate(pl.col("premium")).alias("rebuilt"))

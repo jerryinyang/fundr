@@ -7,7 +7,7 @@ Status: verified — Outcome A verdict reached for both venues (see Findings). N
 - Command (part B): the same probe rerun once `data/phase1/p09/live.jsonl` was final, plus a throwaway comparison script (`/private/tmp/claude-501/step3_compare.py`, not committed) that joins 0xArchive's raw funding against the P9 live log and against each venue's own settled-funding ground truth (`LighterAPI.fundings_all`, `HLInfo.funding_history`).
 - Run dates (UTC): part A 2026-09-19 ~13:00–13:07; part B 2026-09-19 ~23:58–00:03 (probe rerun) and immediately after (comparison script; no extra 0xArchive credits — it only reads the already-saved parquet files plus each venue's own free public API).
 - Markets: all 7 P0 sample coins (ENA, PONS, ONDO, ETHFI, JUP, KAITO, BTC) for coverage; ENA + BTC for raw funding/OI/trades/L3 pulls and the Step 3 comparison (per the brief's script).
-- Dates / windows sampled: the final probe run and Step 3 comparison use the **full P9 window, 2026-09-19 11:27:23 → 16:54:35 UTC (5.45h, ≥5 hourly settlements, 6,777 live records)**. Coverage/catalog calls are not date-scoped and return full history as reported by the vendor.
+- Dates / windows sampled: the final probe run and Step 3 comparison use the **full P9 window, 2026-09-19 11:27:23 → 16:54:35 UTC (5.45h, ≥5 hourly settlements, 6,777 live records)**. Coverage/catalog calls are not date-scoped and return full history as reported by the vendor. Note (added post-P9-correction): this 11:27:23→16:54:35 span is the P9 recorder *process's* lifetime, not its actual data coverage — HL data in the live log ends 15:30:17Z and Lighter ends 15:19:28Z (see P9). The 0xArchive-only tests below (coverage, moves-within-hour, catalog dates) legitimately use the full clock span because the vendor kept recording through the recorder's later stall; only the live-join figures (n=466, the ratio checks) are bounded by P9's actual coverage window.
 
 ## What came back
 - Row counts / sizes: `symbols.json` ~8 MB (full symbol/exchange catalog, all venues). `lighter_instruments.json` 89 KB, 271 Lighter markets. 14 coverage files (7 coins × 2 venues). `lighter_funding_raw.parquet` and `hl_funding_raw.parquet` cover ENA+BTC over the full 5.45h window: **3,842 Lighter rows, 648 HL rows**. Sample pages: OI/trades pages for ENA on both venues, `lighter_l3_current.json` (full L3 book snapshot). `calls.json`: 27 calls in the part-B run (64 total across the whole session, including part A's 25, two schema-discovery calls, and one earlier crashed attempt).
@@ -35,7 +35,7 @@ Status: verified — Outcome A verdict reached for both venues (see Findings). N
 
 **Step 3 decisive test — does 0xArchive's raw funding satisfy Outcome A (moves within the hour, and its last in-hour value equals the closing settlement within tolerance)?**
 
-*Moves-within-hour, full 5.45h window, 12 market-hours total (2 coins × ~6 hours):*
+*Moves-within-hour, full 5.45h window (0xArchive-only test — legitimate over the full clock span per the note above), 12 market-hours total (2 coins × ~6 hours):*
 | Venue | Hours with >1 distinct value |
 |---|---|
 | Lighter | **0 / 12** |

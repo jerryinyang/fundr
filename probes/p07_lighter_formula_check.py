@@ -69,8 +69,13 @@ def premium_frame() -> pl.DataFrame:
 
 
 def settled_frame(market_ids: list[int], start_s: int, end_s: int) -> pl.DataFrame:
-    """P5's snapshot stops before the P9 window, so top it up from the public endpoint (cached)."""
-    cache = store.probe_dir("p07") / "fundings_window.parquet"
+    """P5's snapshot stops before the P9 window, so top it up from the public endpoint (cached).
+
+    Cache filename is keyed on (start_s, end_s, market_ids) so a rerun over a different window
+    or market set can't silently reuse a stale settled series from a previous run.
+    """
+    key = "_".join(str(m) for m in sorted(market_ids))
+    cache = store.probe_dir("p07") / f"fundings_window_{start_s}_{end_s}_{key}.parquet"
     if cache.exists():
         fresh = pl.read_parquet(cache)
     else:

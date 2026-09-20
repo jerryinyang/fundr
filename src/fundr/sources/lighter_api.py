@@ -75,7 +75,7 @@ async def market_stats_stream(
 
 
 def lighter_signed_rate(rate: float, direction: str) -> float:
-    """ASSUMPTION until P5 verifies it: direction 'long' means longs pay (positive rate)."""
+    """Verified (P5/P9, market 212 CAP): direction 'long' means longs pay (positive rate)."""
     return rate if direction == "long" else -rate
 
 

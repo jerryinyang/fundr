@@ -1,4 +1,5 @@
-"""0xArchive REST client. Free tier: last 30 days of data, 50k credits/month.
+"""0xArchive REST client. Free tier: last 30 days of data; credits/month is plan-dependent
+(observed 200k on this account, not the 50k sometimes quoted -- verify against your own plan).
 Every call is logged so P8 can report credit use."""
 import os
 
@@ -29,6 +30,8 @@ class OXArchive:
         return body
 
     def get_all(self, path: str, max_pages: int = 20, **params) -> list:
+        # WARNING: truncates silently at max_pages -- if the vendor has more pages than that,
+        # you get a partial result with no error or flag indicating it was cut short.
         out, cursor = [], None
         for _ in range(max_pages):
             body = self.get(path, **params, **({"cursor": cursor} if cursor else {}))

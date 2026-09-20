@@ -71,11 +71,17 @@ async def main():
     end = time.time() + args.minutes * 60
     while time.time() < end:
         started = time.time()
+        # P9's "Requirements this places on the Phase 2 recorder" (see P9-live-probe.md): a hung
+        # or failing REST poll must never suppress websocket recording. Bound the REST poll with a
+        # timeout so a hung call can't block the loop, and always take the ws snapshot afterward
+        # regardless of whether the poll succeeded — it used to sit inside the same try block as
+        # the poll, so one hung REST call silenced ws recording for the rest of that cycle (this
+        # cost 95 minutes of coverage on the 2026-09-19 run).
         try:
-            await asyncio.to_thread(poll_once)
-            write_ws_snapshot()
-        except Exception as e:  # one failed poll must not end a 4-hour run; it is logged and visible in the data
+            await asyncio.wait_for(asyncio.to_thread(poll_once), timeout=45)
+        except Exception as e:  # one failed/timed-out poll must not end a 4-hour run; it is logged and visible in the data
             write(venue="probe", source="poll_error", error=repr(e))
+        write_ws_snapshot()
         await asyncio.sleep(max(0.0, 60 - (time.time() - started)))
     stop.set()
     await ws_task

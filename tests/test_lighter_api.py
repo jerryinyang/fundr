@@ -33,7 +33,7 @@ def test_fundings_all_chunks_and_dedupes():
     assert [r["timestamp"] for r in rows] == sorted({0, 3600 * 700, 3600 * 1400})
 
 
-def test_signed_rate_assumption():
+def test_signed_rate_verified():
     assert lighter_api.lighter_signed_rate(0.0012, "long") == 0.0012
     assert lighter_api.lighter_signed_rate(0.0012, "short") == -0.0012
 

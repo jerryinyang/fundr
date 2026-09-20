@@ -1,6 +1,10 @@
 """Lighter hourly funding, in PERCENT per hour (not a fraction — same units as
 `/api/v1/fundings`' `rate` field). Confirmed in P7 (docs/phase1/evidence/P7-funding-formulas.md,
-Part B, the `no_multiplier` candidate); parameters come from `orderBookDetails` (P6).
+Part B, the `docs_both_mult_m1` candidate — the docs' clamp ordering, big clamp before `/8`,
+with an effective multiplier of 1.0 for crypto markets); parameters come from `orderBookDetails`
+(P6). Note `docs_both_mult_m1` and the probe's `no_multiplier` candidate are numerically
+identical on all sampled data (multiplier 1.0 makes the docs' extra scaling the identity, and the
+sample never approaches the big clamp) — this module ships the docs' ordering.
 
 The `p` input must be the hour's *final* running-average premium — the `market_stats`
 websocket's `premium` field read just before the hour boundary — not a mean of in-hour
@@ -12,7 +16,8 @@ matches for the mean vs. 16/16 for the last value).
 `multiplier` is accepted for interface parity with the API's `funding_premium_multiplier`
 field, but the confirmed candidate does not scale the premium by it: P7 found the venue's
 `funding_premium_multiplier: 100` denotes an *effective* multiplier of 1.0 for all sample
-(crypto) markets, and the winning candidate (`no_multiplier`) uses the premium unscaled.
+(crypto) markets, and the shipped candidate (`docs_both_mult_m1`, equivalent to `no_multiplier`
+at multiplier 1.0) uses the premium unscaled at that multiplier.
 Whether the multiplier would matter for RWA/Pre-IPO markets (multiplier != 1) is untested
 (P7, "Open issues").
 

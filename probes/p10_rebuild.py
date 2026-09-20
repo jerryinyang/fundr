@@ -1,6 +1,6 @@
 """P10: can each venue's hourly funding be rebuilt from archived premium inputs? Spec pass rule."""
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import polars as pl
 
@@ -12,7 +12,11 @@ from fundr.sources.hl_archive import ARCHIVE_BUCKET, HLArchive, parse_time, read
 
 HL_SAMPLE_SECONDS = 5  # HL averages premium samples taken every 5 s (P7)
 LIGHTER_SAMPLE_SECONDS = 60  # set from the P7 note
-PREMIUM_SCALE = 1.0  # set from P8 Step 3: 0xArchive premium → Lighter percent units
+# P8 Step 3 established 0xArchive's Lighter values are fractions = Lighter's native percent / 100
+# (median ratio 0.01 exactly, n=466). This constant is unreachable in practice: the `has_premium`
+# check below always finds no `premium` field on Lighter's 0xArchive route and exits before this
+# is used, but if that ever changes, 1.0 would silently be wrong by 100x.
+PREMIUM_SCALE = 0.01
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--venue", choices=["hl", "lighter"], required=True)
@@ -73,9 +77,10 @@ else:
     details = store.load_json("p06", "orderbookdetails.json")["body"]["order_book_details"][0]
     params = dict(interest=float(details["base_interest_rate"]), clamp_small=float(details["funding_clamp_small"]),
                   clamp_big=float(details["funding_clamp_big"]), multiplier=float(details["funding_premium_multiplier"]))
-    now = to_ms(datetime.utcnow())
+    now = to_ms(datetime.now(timezone.utc).replace(tzinfo=None))
     win = [(now - 29 * day_ms, now - 25 * day_ms), (now - 6 * day_ms, now - 2 * day_ms)]  # free tier: last 30 days
-    windows = [[datetime.utcfromtimestamp(a / 1000).isoformat(), datetime.utcfromtimestamp(b / 1000).isoformat()] for a, b in win]
+    windows = [[datetime.fromtimestamp(a / 1000, tz=timezone.utc).replace(tzinfo=None).isoformat(),
+                datetime.fromtimestamp(b / 1000, tz=timezone.utc).replace(tzinfo=None).isoformat()] for a, b in win]
 
     # P8: 0xArchive's REST Lighter funding route has no `premium` field (only Hyperliquid's
     # does). P6: Lighter's own API exposes no native historical premium series either (no

@@ -66,7 +66,7 @@ Status is one of: verified / unverified / unavailable. "verified" means a real f
 | Formula | `F_8h = P + clamp(0.0001 − P, −0.0005, +0.0005)`; `F_hourly = clamp(F_8h / 8, −0.04, +0.04)`, with `P` = the hour's average premium as reported by `fundingHistory.premium`. **Confirmed**: reproduces 245/245 off-baseline and 494/494 total settled hours within `1e-10`, mean signed error ≈ −2e-12 | verified (the ±4%/h cap is docs-only — never exercised; largest rate seen 0.0018) | [P7](evidence/P7-funding-formulas.md) |
 | Raw inputs | `premium = impact_price_difference / oracle_px`, sampled every **5 s** and averaged over the hour (docs). The 5-second samples are **not published anywhere**; the finest public premium is the archive's 1-minute snapshot | verified (that the samples are unpublished); formula for premium itself is docs-only | [P7](evidence/P7-funding-formulas.md) |
 | Intra-hour state observable **live**? | Yes — `funding` and `premium` on `metaAndAssetCtxs`, at whatever cadence you poll | verified | [P9](evidence/P9-live-probe.md) |
-| Intra-hour state observable **historically**? | Yes in form, no in accuracy. The archive holds a per-minute running `funding` back to 2023-05-20, and 0xArchive mirrors it at ~61 s from each market's listing — but that value **never equals** the closing settlement off-baseline: 0/64, 0/108, 0/27 archived coin-hours by date; 0/16 informative hours live; 1/5 informative hours via 0xArchive. Residual is 1e-7 to 1e-6, i.e. 2,000×–10,700× the reported tolerance | verified | [P4](evidence/P4-hl-api-crosscheck.md), [P9](evidence/P9-live-probe.md), [P8](evidence/P8-oxarchive.md) |
+| Intra-hour state observable **historically**? | Yes in form, no in accuracy. The archive holds a per-minute running `funding` back to 2023-05-20, and 0xArchive mirrors it at ~61 s from each market's listing — but that value **never equals** the closing settlement off-baseline: 0/64, 0/108, 0/27 archived coin-hours by date; 1/16 informative hours live (that one match is a baseline hour; no off-baseline hour ever matched); 1/5 informative hours via 0xArchive (0xArchive figures are from 2 coins, ENA and BTC, 12 market-hours total — see P8; "informative" = hours where the settled rate actually changed from the prior hour, 5 of the 12). Residual is 1e-7 to 1e-6, i.e. 2,000×–10,700× the reported tolerance. Note also: unlike P10's rebuild rule (`min_off_baseline=100`), the spec's Outcome A rule sets no minimum sample size — these 0xArchive figures (n=12, n=5) stand as-is | verified | [P4](evidence/P4-hl-api-crosscheck.md), [P9](evidence/P9-live-probe.md), [P8](evidence/P8-oxarchive.md) |
 | Exact rebuild from archived inputs? | No — **not attemptable by construction**: the formula averages premium every 5 s, the archive holds one sample per minute. Attempted anyway for completeness: 0/264 off-baseline coin-hours within tolerance, absolute errors 1e-5–2e-5 | verified | [P10](evidence/P10-rebuild.md) |
 
 ### Lighter
@@ -170,7 +170,7 @@ settlement on ≥99% of market-hours; else **C** if P10's verdict is `pass`; els
 
 | Venue | Outcome | Rule applied | Evidence |
 |---|---|---|---|
-| Hyperliquid | **Prospective only (B)** | **Step 1 (A) — fails on the second condition.** An archived intra-hour source does exist and does move within the hour like the live value: `asset_ctxs.funding`, per minute from 2023-05-20, changes within 57–87% of coin-hours (archive) against 76.2% live. But its last in-hour value equals the closing settlement on **0%** of off-baseline coin-hours at the venue's own `1e-10` precision — 0/64, 0/108, 0/27 by date; all-hours 159/358 = 44.4%, entirely from trivial baseline hours. Confirmed live at the same cadence (1/16 informative hours; residual 1e-7–1e-6, i.e. 2,000×–10,700× tolerance) and via 0xArchive's 61 s mirror (7/12 all hours, 1/5 informative). Far below 99%. **Step 2 (C) — fails.** P10 verdict `not_attemptable` (`raw_verdict: "fail"`): the formula averages premium every 5 s, the archive holds 1 sample per minute, so exact rebuild is impossible by construction; the coarse attempt scored 0/264 off-baseline. **Step 3 ⇒ B.** | [P1](evidence/P1-hl-asset-ctxs.md), [P4](evidence/P4-hl-api-crosscheck.md), [P7](evidence/P7-funding-formulas.md), [P8](evidence/P8-oxarchive.md), [P9](evidence/P9-live-probe.md), [P10](evidence/P10-rebuild.md) |
+| Hyperliquid | **Prospective only (B)** | **Step 1 (A) — fails on the second condition.** An archived intra-hour source does exist and does move within the hour like the live value: `asset_ctxs.funding`, per minute from 2023-05-20, changes within 57–87% of coin-hours (archive) against 76.2% live. But its last in-hour value equals the closing settlement on **0%** of off-baseline coin-hours at the venue's own `1e-10` precision — 0/64, 0/108, 0/27 by date; all-hours 159/358 = 44.4%, entirely from trivial baseline hours. Confirmed live at the same cadence (1/16 informative hours; residual 1e-7–1e-6, i.e. 2,000×–10,700× tolerance) and via 0xArchive's 61 s mirror (7/12 all hours, 1/5 informative — 0xArchive figures are from 2 coins, ENA and BTC, 12 market-hours total; the spec's Outcome A rule, unlike P10's `min_off_baseline=100`, sets no minimum n). Far below 99%. **Step 2 (C) — fails.** P10 verdict `not_attemptable` (`raw_verdict: "fail"`): the formula averages premium every 5 s, the archive holds 1 sample per minute, so exact rebuild is impossible by construction; the coarse attempt scored 0/264 off-baseline. **Step 3 ⇒ B.** | [P1](evidence/P1-hl-asset-ctxs.md), [P4](evidence/P4-hl-api-crosscheck.md), [P7](evidence/P7-funding-formulas.md), [P8](evidence/P8-oxarchive.md), [P9](evidence/P9-live-probe.md), [P10](evidence/P10-rebuild.md) |
 | Lighter | **Prospective only (B)** | **Step 1 (A) — fails on the first condition: there is no archived source at all.** The live `current_funding_rate` would satisfy the equality test outright — it is a genuine running estimate of the accruing interval and its last in-hour value equals that interval's settlement on **21/21** profiled hours and **11/11** informative hours, exactly, not within tolerance. But Outcome A requires an *archived* source with that property and none exists: `/api/v1/fundings` rejects sub-hourly resolutions (HTTP 400), and 0xArchive's Lighter `funding_rate` never moves within an hour (0/12 market-hours) because it is a ~10 s-cadence mirror of the **settled** series, matching 0/5 informative hours. **Step 2 (C) — fails.** P10 verdict `not_attemptable` with no rebuild even run: no historical premium input exists on Lighter's API ([P6](evidence/P6-lighter-market-state.md)), on 0xArchive's REST route (no `premium` field — re-confirmed live, keys `[coin, funding_rate, symbol, timestamp]`), or anywhere else; the only Lighter premium data in existence is the 3h52m P9 recording. **Step 3 ⇒ B.** | [P5](evidence/P5-lighter-fundings.md), [P6](evidence/P6-lighter-market-state.md), [P7](evidence/P7-funding-formulas.md), [P8](evidence/P8-oxarchive.md), [P9](evidence/P9-live-probe.md), [P10](evidence/P10-rebuild.md) |
 
 Spread version historical over: **none.** Both venues are Outcome B, so no period qualifies and
@@ -182,6 +182,35 @@ but never equal; if a later phase is willing to define Target C against an appro
 value rather than an exact one, HL has 3+ years of history to work with — that would be a
 redefinition of the target, not a reversal of this decision. Lighter has nothing archived at any
 accuracy, and its running value, once recorded, is exact.
+
+---
+
+## 6. Known gaps
+
+- **No analysed archive date exercises 2023–2024.** The `old` date used throughout (P4, P7, P10) is
+  2025-02-21 — chosen because it is the first day all six non-PONS sample coins exist — so schema
+  stability before 2025 rests on nothing but the first probe run's initial pass over
+  `archive_start` (2023-05-20). No funding/premium/formula check in this audit exercises a
+  2023–2024 date.
+- **PONS contributes nothing to the old/mid dates or P10's old window.** PONS was listed
+  2026-08-31/2026-09-02 (well after `old` 2025-02-21 and `mid` 2025-12-05), so P10's old-window
+  rebuild test ran on 4 mid-cap sample coins, not 5 — PONS is absent from that window entirely, not
+  merely thin.
+- **`data/phase1/p09/live.jsonl` is the only Lighter premium history that exists.** It is
+  gitignored and lives on one machine. If it is lost, Lighter's formula confirmation (P7) cannot be
+  re-derived — 2026-09-19 cannot be re-recorded, since the premium field is not published anywhere
+  else, live or archived. **Recommend backing it up outside git** (e.g. to cloud storage or a second
+  disk) before any further work on this branch.
+- **HL listing dates differ between sources and neither is a confirmed listing date.** P1's
+  candle-derived dates (e.g. ETHFI 2024-03-18, BTC 2020-08-19) are unreliable — the BTC date
+  predates Hyperliquid's existence, so it cannot be a real listing date and is more likely an
+  artifact of how P1 derived it from the first available `1d` candle. The audit's own
+  0xArchive-derived dates (ETHFI 2024-03-21, BTC 2023-05-20) are a vendor ingest start date, not a
+  listing date — 0xArchive's own HL coverage note (P8) says HL history "goes back to each market's
+  real listing date," but 2023-05-20 recurring as BTC's earliest date across every HL data type is
+  also exactly 0xArchive's own archive-start artifact, so it is not independently confirmed either.
+  **HL's `fundingHistory` start was never queried directly** for any sample coin — doing so (a free
+  call) would settle this but was out of scope for this pass.
 
 ---
 
