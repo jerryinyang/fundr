@@ -6,14 +6,50 @@ Status: verified
 - Command: `probes/p09_live.py --minutes 250` (background, started earlier); analysis via
   `FUNDR_DATA=/Users/jerryinyang/Trading/fundr/data/phase1 uv run python probes/p09_analyze.py`
   and `probes/p09_analyze_extra.py`
-- Run date (UTC): 2026-09-19, 11:27:23Z → 16:54:35Z (5h27m, ≥ 5 hourly settlements)
+- Run date (UTC): 2026-09-19. The process was alive 11:27:23Z → 16:54:35Z, but **that is not the
+  data window** — corrected 2026-09-20 (Task 15 part B), see "Actual coverage per venue" below.
 - Markets: the 7 P0 sample markets (ENA, PONS, ONDO, ETHFI, JUP, KAITO, BTC / Lighter market ids
   1, 26, 29, 33, 38, 64, 231)
 - Recording: `data/phase1/p09/live.jsonl`, 6,777 records: `metaAndAssetCtxs` 1638,
   `predictedFundings` 1638, `orderBookDetails` 1632, `funding-rates` 233, `ws_market_stats` 1631,
-  `ws_reconnect` 4 (all Lighter websocket `ConnectionClosedError`, auto-recovered), `poll_error` 1
-  (one `ReadTimeout`, logged and skipped, run continued). `live_aborted_run1.jsonl` (6-minute
-  aborted first attempt) was ignored per the brief.
+  `ws_reconnect` 4 (all Lighter websocket `ConnectionClosedError`), `poll_error` 1 (one
+  `ReadTimeout`). `live_aborted_run1.jsonl` (6-minute aborted first attempt) was ignored per the
+  brief.
+
+### Actual coverage per venue (corrected 2026-09-20, Task 15 part B)
+The original version of this note read the process's last record timestamp (16:54:35Z) as the end
+of the data. It is not: the last two records are an error pair (`ws_reconnect` + `poll_error`), not
+data. Per-source first and last record (from `live.jsonl`):
+
+| source | venue | first | last | poll cycles |
+|---|---|---|---|---|
+| `metaAndAssetCtxs` | HL | 11:27:23Z | **15:30:17Z** | 234 |
+| `predictedFundings` | HL | 11:27:23Z | 15:30:18Z | 234 |
+| `orderBookDetails` | Lighter REST | 11:27:24Z | 15:30:19Z | 233 full + 1 partial |
+| `funding-rates` | both | 11:27:28Z | **15:19:28Z** | 233 |
+| `ws_market_stats` | Lighter ws | 11:27:28Z | **15:19:28Z** | 233 |
+
+- **Hyperliquid data coverage: 11:27:23Z → 15:30:17Z** (4h03m of wall clock, 234 poll cycles), with
+  a 649-second hole between the 15:19:23Z and 15:30:17Z cycles.
+- **Lighter `market_stats` data coverage: 11:27:28Z → 15:19:28Z** (3h52m, 233 snapshot cycles),
+  contiguous at ~1/minute with no hole. Nothing was recorded from the Lighter websocket after
+  15:19:28Z, although the feed itself kept running — see "Why the Lighter websocket recording
+  stopped" below.
+- **Nothing at all was recorded between 15:30:19Z and 16:54:35Z** for either venue.
+- Do **not** read any Lighter conclusion in this note as covering 5h27m. The Lighter numbers below
+  rest on 3h52m.
+
+### Hour counts per venue (unchanged by the correction, recomputed)
+The profiled-hour filter is `n_rows >= 50` one-minute samples per coin/market-hour. Clock hours
+touched: 11:00 (partial, 33 samples — recording started 11:27), 12:00, 13:00, 14:00 (60 samples
+each), 15:00 (partial: HL 20 cycles, Lighter 20 snapshots). So for **both** venues the hours that
+pass the filter are 12:00, 13:00 and 14:00 UTC × 7 markets = **21 coin/market-hours**. The "21
+fully-observed coin/market-hours per venue" figure used throughout this note was computed from the
+data, not from the assumed window, and is therefore correct as it stands; the shorter Lighter
+window does not change it, because the hours it removes (15:00 onward) were already excluded as
+incomplete. The same is true of every derived count below (16 informative HL hours, 11 informative
+Lighter hours, the 6/21 and 21/21 alignment rates). Only the theoretical denominator changes:
+7 markets × 3 complete hours, not 7 × 5–6.
 
 ## What came back
 
@@ -37,7 +73,8 @@ poll errors: 1, ws reconnects: 4
 ```
 Full verbatim output in the run log; 21 fully-observed coin/market-hours per venue
 (`n_rows >= 50`, i.e. hours with a complete ~55–60 one-minute samples) out of a theoretical
-7 markets × 5–6 hours.
+7 markets × 3 complete hours (12:00–14:00 UTC — see "Actual coverage per venue" above; the
+original text said "5–6 hours", which came from the overstated window).
 
 ### Extra checks (`probes/p09_analyze_extra.py`, new — committed)
 
@@ -59,7 +96,7 @@ settlement when they're equal):
     baseline hours.
 
 **(b) Lighter sign convention.** None of the 7 sample markets went negative anywhere in the
-5.4h recording (`current_funding_rate` and `funding_rate` both ≥ 0.0012 the whole time — this
+3h52m Lighter recording (`current_funding_rate` and `funding_rate` both ≥ 0.0012 the whole time — this
 window happened to be long-pays-short across the board for these markets). Extended the check
 to all Lighter markets:
 - `GET /api/v1/funding-rates` (live, unauthenticated): 214 Lighter markets, 16 currently negative
@@ -207,12 +244,74 @@ the closing settlement, tolerance `1e-10` per P4/P7):
   mark/index/oracle price, volume are all present on at least one live endpoint per venue; signed
   trades confirmed separately).
 
-### Reliability
-- 1 `poll_error` (`ReadTimeout`) over 5.4h / ~250 poll cycles — logged, skipped, run continued
-  automatically; no data loss beyond that one cycle.
-- 4 Lighter `ws_reconnect` events (`ConnectionClosedError`), all auto-recovered within the 5s
-  retry backoff — consistent with the dispatch note's expectation and P9 part A's partial-run
-  finding (2 reconnects at ~3h, 4 by 5.4h — roughly linear, ~1 reconnect/1.3h).
+### Reliability (rewritten 2026-09-20, Task 15 part B — the original reading was wrong)
+- 234 poll cycles were started, not ~250; the run was launched with `--minutes 250` but only 234
+  cycles ran before it ended, and it ended 77 minutes *after* its own deadline (see below).
+- 1 `poll_error` (`ReadTimeout('The read operation timed out')`) at 16:54:35Z. The original text
+  ("logged, skipped, run continued automatically; no data loss beyond that one cycle") is
+  **incorrect**: this error is where the run ended, and it cost 84 minutes of both venues' data.
+- 4 Lighter `ws_reconnect` events (all `ConnectionClosedError(None, None, None)`) at **11:45:23Z,
+  13:30:51Z, 15:30:15Z, 16:54:35Z**. Only the first two happened during normal operation and both
+  recovered cleanly (see the stall analysis below) — 2 reconnects over 3h52m of live streaming,
+  ~1 per 1.9h, not the "~1 per 1.3h" the original text extrapolated. The last two sit exactly at
+  the two recording stalls and are symptoms of those, not independent events.
+
+### Why the Lighter websocket recording stopped at 15:19:28Z (finding from this run, 2026-09-20)
+Diagnosed in Task 15 part B from `live.jsonl` alone; `probes/p09_live.py` was deliberately **not**
+changed — the recorder is Phase 2's to build, and this is a requirement for it, not a fix now.
+
+Evidence, in order:
+- **The feed did not stall.** Every one of the 1,631 `ws_market_stats` snapshots carries
+  `n_msgs > 0` (min 2, median 47, max 366). There is no snapshot written from a stale `latest[m]`
+  anywhere in the run, so the "silently repeating the last value" failure mode did **not** occur.
+- **The reconnect loop worked.** Around the 11:45:23Z and 13:30:51Z reconnects the per-minute
+  snapshots continue uninterrupted with healthy `n_msgs` on both sides of each event (e.g. 13:24:28
+  n_msgs 29–136 across the 7 markets, 13:25:35 n_msgs 32–117). No snapshot is missing there.
+- **The recording of the feed is coupled to the REST poll.** In `probes/p09_live.py`,
+  `write_ws_snapshot()` is called only after `poll_once()` returns, inside the same `try`. If a REST
+  call inside `poll_once()` hangs or raises, that cycle's websocket snapshot is never written, even
+  though the websocket task is still receiving messages on the event loop. This is the mechanism
+  that lost the data.
+- **What the last cycle did.** Record counts decompose exactly: 234 cycles of `metaAndAssetCtxs`
+  and `predictedFundings` (1638 = 234 × 7), but only 233 of `funding-rates` and of
+  `ws_market_stats` (1631 = 233 × 7), and 1632 `orderBookDetails` = 233 × 7 + 1. Cycle 234 wrote
+  its 7 `metaAndAssetCtxs` (15:30:17Z), its 7 `predictedFundings` (15:30:18Z) and exactly **one**
+  `orderBookDetails` (ENA, 15:30:19Z), then blocked inside the next
+  `lighter.order_book_details(...)` call for **84 minutes**, until the `ReadTimeout` at 16:54:35Z.
+  The `except` branch then logged `poll_error` and skipped `write_ws_snapshot()`, and the
+  `while time.time() < end` test finally failed (the deadline had passed at 15:37:23Z), so the run
+  exited.
+- **There were two stalls, not one.** The cycle before it also stalled: 649 s elapsed between the
+  15:19:23Z cycle and the 15:30:17Z one, against a 60 s target.
+- **Inference (not confirmed): the host suspended twice.** An 84-minute block on an httpx client
+  built with `timeout=30` should be impossible; a websocket `ConnectionClosedError` is logged 2 s
+  before the first resume (15:30:15Z) and again in the same second as the final timeout
+  (16:54:35Z); and the 649 s and 84 min gaps are both wall-clock gaps with no work recorded in
+  them. A suspended/sleeping laptop losing its sockets explains all of it; a venue-side outage
+  explains none of it (Lighter's REST and websocket were both healthy immediately before and, per
+  Task 15 part B's re-fetch, its `/fundings` history for the stalled window is complete). Not
+  proven — no host logs were kept.
+
+**Requirements this places on the Phase 2 recorder** (all labelled as findings from this run):
+1. **Never gate feed recording on a REST poll.** Websocket snapshots must be written on their own
+   timer, in a task that cannot be blocked by any HTTP call. One hung REST call silently ended the
+   Lighter websocket recording here even though the feed was live.
+2. **Detect a stalled feed explicitly**: if a snapshot interval sees `n_msgs == 0` for N
+   consecutive intervals (N small, e.g. 2–3), force a reconnect and raise an alert, and either skip
+   the snapshot or mark it `stale: true` — never silently re-emit `latest[m]`. This run never hit
+   `n_msgs == 0`, but the code path that would repeat a stale value indefinitely exists by
+   construction, and a reader cannot tell a repeated value from a fresh identical one without
+   `n_msgs`. Keeping an `n_msgs`-style counter on every snapshot is itself a requirement — it is
+   the only reason this diagnosis was possible.
+3. **Enforce timeouts out-of-band.** A client-level `timeout=30` did not bound an 84-minute read.
+   Wrap every network call in an external watchdog (`asyncio.wait_for` or equivalent) and re-issue
+   or skip on expiry.
+4. **Detect wall-clock jumps / host suspension.** Treat any inter-cycle gap greater than ~2 poll
+   intervals as a coverage hole, write an explicit gap record, and re-check the run deadline inside
+   the cycle rather than only between cycles (this run overran its own deadline by 77 minutes).
+5. **Alert on coverage, not on record counts.** The missing hour here shows up as 1631 vs 1638
+   records — a 0.4% difference that no count-based check would catch. Monitor expected-vs-actual
+   snapshots per market per hour.
 
 ## Bug fixes
 None. `probes/p09_analyze.py` ran to completion unmodified against the full 6,777-line final
@@ -242,3 +341,22 @@ empty-frame errors.
   seconds apart (REST snapshot vs. websocket), not one atomic read; sign and rough magnitude
   agree, but this is not as tight a check as the `/fundings`-vs-websocket comparison, which used
   matching timestamps.
+- The two recording stalls (649 s at 15:19–15:30Z and 84 min at 15:30–16:54Z) are attributed to
+  host suspension by **inference only** — the evidence rules out a venue outage and rules out a
+  feed stall, but no host-level logs were kept to prove it.
+- The Lighter conclusions in this note rest on 3h52m / 21 market-hours, not the 5h27m the original
+  version implied. Task 15 part B, which reuses this recording as its only Lighter premium source,
+  is bounded by the same 3h52m (28 market-hours after its own coverage filter, 16 off-baseline).
+- `probes/p09_live.py` still couples websocket-snapshot writing to a successful REST poll. Left
+  unchanged on purpose: the Phase 2 recorder is a separate build, and the requirements above are
+  where this is recorded.
+
+## Corrections log
+- **2026-09-20 (Task 15 part B)**: the stated run window (11:27:23Z → 16:54:35Z, "5h27m") was the
+  process lifetime, not the data window. Replaced with per-venue coverage (HL to 15:30:17Z,
+  Lighter `market_stats` to 15:19:28Z); corrected the theoretical hour denominator from "7 markets
+  × 5–6 hours" to 7 × 3 complete hours; rewrote the Reliability section (the `poll_error` ended the
+  run rather than being survived, and the reconnect-rate extrapolation was wrong); added the stall
+  diagnosis and the Phase 2 recorder requirements. **No measured result changed** — every profiled
+  hour count, match rate and alignment figure in this note was computed from the data with an
+  `n_rows >= 50` filter that already excluded the hours the shorter window removes.

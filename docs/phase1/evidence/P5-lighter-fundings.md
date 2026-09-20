@@ -39,7 +39,8 @@ timestamp=1737108000  settle_time=2025-01-17 10:00:00  rate=0.0000  direction=lo
 - **Units — `rate`**: `rate_str` values are always formatted to 4 decimal places (`reported_tolerance` = `0.0001` for every market), e.g. `"0.0012"`. Baseline-rate hours (where funding sits at the interest-rate floor, e.g. PONS's first row, ONDO's and ETHFI's early rows) report `rate=0.0012`. `order_book_details(231)` gives `base_interest_rate="0.0100"`; `0.0100 ÷ 8 = 0.00125`, which truncated (not rounded) to 4 dp is `0.0012` — matches exactly. This confirms `rate` is **percent per hour** (the interest-rate baseline is defined per-8h and divided by 8 to get the hourly rate), reported truncated to 4 decimal places.
 - **`value` field (tentative)**: for every row sampled, `value / rate` is roughly constant within a market over short windows and its scaled value (`value / rate × 100`) tracks a plausible spot price for that coin at that historical date (e.g. ENA ≈ 0.36–0.37, ONDO ≈ 0.92, ETHFI ≈ 1.18–1.19). This is consistent with `value = (rate/100) × mark_price`, i.e. `value` looks like the per-hour funding payment in quote currency per unit of the base asset, while `rate` is the dimensionless percent rate. Not independently verified against an authoritative price series — flagged as an inference, not a confirmed fact.
 - **Sign convention** — **verified in Task 12 (P9)**: none of the 7 P0 sample markets went
-  negative during the P9 live recording (11:27–16:54 UTC, 2026-09-19), so the check was extended
+  negative during the P9 live recording (Lighter coverage 11:27–15:19 UTC, 2026-09-19 — see P9's
+  "Actual coverage per venue"), so the check was extended
   to all Lighter markets. `GET /api/v1/funding-rates` (live) showed market_id 212 (`CAP`) at
   −0.003672. Its latest `/api/v1/fundings` row: `{timestamp: 1789858800, rate: "0.0478",
   direction: "short"}` — `rate` is an unsigned magnitude, sign lives in `direction`. The live
