@@ -1,0 +1,102 @@
+[
+ {
+  "premium": 0.1186,
+  "settled": 0.0085,
+  "settled_str": "0.0085"
+ },
+ {
+  "premium": 0.089,
+  "settled": 0.0048,
+  "settled_str": "0.0048"
+ },
+ {
+  "premium": 0.0643,
+  "settled": 0.0017,
+  "settled_str": "0.0017"
+ },
+ {
+  "premium": 0.0744,
+  "settled": 0.003,
+  "settled_str": "0.0030"
+ },
+ {
+  "premium": 0.0787,
+  "settled": 0.0035,
+  "settled_str": "0.0035"
+ },
+ {
+  "premium": 0.0951,
+  "settled": 0.0056,
+  "settled_str": "0.0056"
+ },
+ {
+  "premium": 0.0854,
+  "settled": 0.0044,
+  "settled_str": "0.0044"
+ },
+ {
+  "premium": 0.0946,
+  "settled": 0.0055,
+  "settled_str": "0.0055"
+ },
+ {
+  "premium": 0.0777,
+  "settled": 0.0034,
+  "settled_str": "0.0034"
+ },
+ {
+  "premium": 0.0764,
+  "settled": 0.0033,
+  "settled_str": "0.0033"
+ },
+ {
+  "premium": 0.0795,
+  "settled": 0.0036,
+  "settled_str": "0.0036"
+ },
+ {
+  "premium": 0.0795,
+  "settled": 0.0036,
+  "settled_str": "0.0036"
+ },
+ {
+  "premium": 0.0989,
+  "settled": 0.0061,
+  "settled_str": "0.0061"
+ },
+ {
+  "premium": 0.0922,
+  "settled": 0.0052,
+  "settled_str": "0.0052"
+ },
+ {
+  "premium": 0.1041,
+  "settled": 0.0067,
+  "settled_str": "0.0067"
+ },
+ {
+  "premium": -0.0034,
+  "settled": 0.0012,
+  "settled_str": "0.0012"
+ },
+ {
+  "premium": -0.0056,
+  "settled": 0.0012,
+  "settled_str": "0.0012"
+ },
+ {
+  "premium": -0.0079,
+  "settled": 0.0012,
+  "settled_str": "0.0012"
+ },
+ {
+  "premium": -0.0053,
+  "settled": 0.0012,
+  "settled_str": "0.0012"
+ },
+ {
+  "premium": 0.0108,
+  "settled": 0.0012,
+  "settled_str": "0.0012"
+ }
+]
