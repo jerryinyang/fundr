@@ -1,10 +1,12 @@
 # P10 — Rebuild test
 
-Status: Hyperliquid **verified** (not attemptable, per spec rule); Lighter **pending (part B)**
+Status: Hyperliquid **verified** (not attemptable, per spec rule); Lighter **verified** (not attemptable — no premium input exists to attempt with)
 
-This note covers the Hyperliquid half only. The Lighter half (0xArchive premium inputs,
-`lighter_formula`, and the Lighter verdict) is out of scope for this dispatch and is added
-in part B once `lighter_formula.py` exists (Task 16 part B).
+This note covers both venues. Hyperliquid ran the full rebuild pipeline (see below). Lighter
+could not run the pipeline at all: there is no historical premium input anywhere to feed it, so
+the probe stops after a minimal, cheap check of the vendor response and writes a
+`not_attemptable` verdict directly, rather than crashing partway through a rebuild that was
+never possible.
 
 ## Hyperliquid
 
@@ -122,6 +124,103 @@ in part B once `lighter_formula.py` exists (Task 16 part B).
 
 ## Lighter
 
-Pending (part B) — the Lighter half of P10, including `lighter_formula`, 0xArchive premium
-downloads, and the Lighter verdict, is added once Task 16 part B (`lighter_formula.py`) is
-implemented.
+### What ran
+- Command: `FUNDR_DATA=/Users/jerryinyang/Trading/fundr/data/phase1 uv run python probes/p10_rebuild.py --venue lighter`
+- Run date (UTC): 2026-09-20
+- The Lighter branch of `probes/p10_rebuild.py`, as written in the Task 17 brief, assumed a
+  historical premium input was reachable via 0xArchive's `/v1/lighter/funding/{coin}` route (the
+  same route the Hyperliquid side calls, which does carry a `premium` field for HL). It does not
+  for Lighter. Rather than let the probe run its full pipeline and crash on a missing `premium`
+  column partway through (after spending most of the credit budget on data that could never be
+  used), the probe now makes one minimal, cheap request first — `GET /v1/lighter/funding/ENA`
+  with `limit=1` — to check the vendor response directly, and writes a `not_attemptable` verdict
+  immediately if `premium` is absent, instead of proceeding.
+
+### Inputs sought, and why each is unavailable
+Three possible sources of historical Lighter premium were considered; none work:
+1. **Lighter's own API.** P6 (`docs/phase1/evidence/P6-lighter-market-state.md`, "Premium
+   history"): "None found natively as a 'premium' series. `/api/v1/markPriceCandles` gives
+   historical mark price; `/api/v1/candles` gives historical trade price. A premium series (mark
+   − index, or similar) would have to be derived by combining `markPriceCandles` with a
+   historical index-price source — no such index-price-history endpoint was found among the
+   endpoints checked." So Lighter's live API has no historical premium series, and no
+   index-price history to derive one from either.
+2. **0xArchive's REST route** (`/v1/lighter/funding/{coin}`). P8 (`docs/phase1/evidence/P8-oxarchive.md`):
+   "Lighter's REST funding route has no `premium` field — a deviation from the brief's script,
+   which assumed both venues return it... Hyperliquid adds `premium`." Confirmed live again here:
+   the probe's minimal check returned `{"coin", "symbol", "timestamp", "funding_rate"}` for
+   Lighter — no `premium` key, matching P8 exactly.
+3. **0xArchive's WebSocket replay.** P8 also found (Step 4) that the *replay* channel's nested
+   `data` object does include a `premium` field for Lighter, unlike the plain REST route — but
+   flagged this as "untested" beyond that one observation, and it is a live-replay stream of
+   recent data (clamped to 10× realtime on the free tier), not an archived historical series
+   reachable for arbitrary past windows the way the HL `asset_ctxs` archive is. Using it here
+   would mean building and validating a new, unverified data path under this task's minimal-change
+   constraint and outside the controller's ruling — not attempted.
+4. **The P9 live recording** (`data/phase1/p09/live.jsonl`). This is real Lighter premium data
+   (used by P7 to confirm the formula) but it spans only ~3h52m of wall-clock time on one day —
+   nowhere near the two 4-day windows this probe's design calls for, and it predates the "old"
+   and "recent" windows this probe would need to compare against different market regimes. It is
+   the *only* premium history that exists for Lighter anywhere (P7's own framing), which is
+   exactly why it cannot double as an archive.
+
+No substitute input was invented; per the controller's ruling, the probe reports the missing
+input and stops.
+
+### Verdict
+```json
+{
+  "verdict": "not_attemptable",
+  "attemptable": false,
+  "reason": "No historical Lighter premium input exists to rebuild from. 0xArchive's REST Lighter funding route (/v1/lighter/funding/{coin}) has no premium field (P8) -- confirmed live here: sample keys were ['coin', 'funding_rate', 'symbol', 'timestamp']. Lighter's own API has no native historical premium series either (P6: no premium/index-price-history endpoint to derive one from). The only Lighter premium data that exists anywhere is the ~3h52m P9 live websocket recording, which is far short of the two 4-day archive windows this probe needs and is not a substitute for an archive.",
+  "missing_input": "historical Lighter premium",
+  "checked": {"path": "/v1/lighter/funding/ENA", "sample_keys": ["coin", "funding_rate", "symbol", "timestamp"]},
+  "input_cadence": null,
+  "all": null,
+  "off_baseline": null,
+  "tol": null,
+  "windows": [
+    ["2026-08-22T00:39:56.914", "2026-08-26T00:39:56.914"],
+    ["2026-09-14T00:39:56.914", "2026-09-18T00:39:56.914"]
+  ]
+}
+```
+Saved at `data/phase1/p10/verdict_lighter.json`. No rebuild statistics (`all`, `off_baseline`,
+`tol`, `input_cadence`) exist because the pipeline never ran past the input check.
+
+### What would be needed to attempt this later
+A **prospective recorder** capturing Lighter's `market_stats` websocket `premium` field (the
+running hourly average — P7's key finding, not a per-minute spot sample) at, say, once per
+minute, continuously, for at least the two 4-day windows this design calls for. This is exactly
+the kind of data P9's live recording captured for ~3h52m; running the same recorder
+uninterrupted for days would produce the missing input. No amount of querying existing vendor
+history (Lighter's own API, or 0xArchive) can substitute, because none of them retain this field
+historically — it only exists as of "now" on the live feed.
+
+### Spend
+- 0xArchive: one call, `GET /v1/lighter/funding/ENA` with `limit=1` (the account's cumulative
+  credits-used counter read 30 after the call; this task's own delta is 1 page ≈ 1–2 credits per
+  P8's per-route cost table). Well under any budget; no other calls made.
+
+### Deviation from the spec
+The spec's rebuild design calls for two 4-day windows per venue (old and recent), matching P1's
+market-regime split. For Lighter this could not happen: not only were the archive windows
+unreachable (no premium field to pull), but even if 0xArchive's REST route did carry `premium`,
+its free-tier data-payload calls are restricted to roughly the last 30 days (P8, "Free-tier
+30-day limit"), which would rule out an "old" window matching HL's Feb-2025 window anyway. The
+windows recorded in the verdict JSON (both inside the last 30 days, computed the same way as the
+0xArchive windows the brief's original code would have used) are therefore vestigial — carried
+over from the unreached code path for schema consistency, not evidence of an attempted rebuild.
+
+### Findings
+- Lighter's hourly funding **cannot be rebuilt at all** from any currently available historical
+  source — not "coarser than needed" (HL's case) but **absent entirely**. No historical premium
+  series exists on Lighter's own API (P6), 0xArchive's REST catalog (P8), or anywhere else, except
+  the ~3h52m P9 live recording, which is too short to serve as an archive and does not cover the
+  two required 4-day windows.
+- This is a stronger and more definitive "not attemptable" than HL's cadence-mismatch case: HL's
+  archive exists and is merely too coarse (60s vs. the formula's 5s sampling); Lighter's archive
+  does not exist at all for this field.
+- Per the design's Target C rule, Lighter's funding-rebuild path is not Outcome C for the same
+  reason it can never run: there is no historical premium input to reconstruct from, at any
+  granularity.

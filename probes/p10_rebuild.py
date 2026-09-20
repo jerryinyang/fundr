@@ -66,8 +66,6 @@ if args.venue == "hl":
         baseline_expr = (pl.col("settled") - hl_formula.BASELINE_HOURLY).abs() < 1e-12
         baseline_expr = baseline_expr | (pl.col("settled").abs() == hl_formula.CAP_HOURLY)
 else:
-    # Lighter half is out of scope for this dispatch (lighter_formula/OXArchive do not exist
-    # yet); imported here so `--venue hl` never touches this branch.
     from fundr.funding import lighter_formula
     from fundr.sources.oxarchive import OXArchive
 
@@ -78,6 +76,43 @@ else:
     now = to_ms(datetime.utcnow())
     win = [(now - 29 * day_ms, now - 25 * day_ms), (now - 6 * day_ms, now - 2 * day_ms)]  # free tier: last 30 days
     windows = [[datetime.utcfromtimestamp(a / 1000).isoformat(), datetime.utcfromtimestamp(b / 1000).isoformat()] for a, b in win]
+
+    # P8: 0xArchive's REST Lighter funding route has no `premium` field (only Hyperliquid's
+    # does). P6: Lighter's own API exposes no native historical premium series either (no
+    # index-price-history endpoint to derive one from markPriceCandles). So before spending
+    # more credits, check the vendor response directly and fail cleanly if the field really
+    # is absent, instead of crashing later when `.premium` is missing from the frame.
+    probe_coin = sample[0]["coin"]
+    probe_rows = ox.get_all(f"/v1/lighter/funding/{probe_coin}", max_pages=1, limit=1, start=win[0][0], end=win[0][1])
+    has_premium = bool(probe_rows) and "premium" in probe_rows[0]
+    if not has_premium:
+        store.save_json("p10", "oxarchive_calls.json", ox.calls)
+        out = {
+            "verdict": "not_attemptable",
+            "attemptable": False,
+            "reason": (
+                "No historical Lighter premium input exists to rebuild from. 0xArchive's REST "
+                "Lighter funding route (/v1/lighter/funding/{coin}) has no premium field (P8) "
+                "-- confirmed live here: sample keys were "
+                f"{sorted(probe_rows[0].keys()) if probe_rows else []}. Lighter's own API has no "
+                "native historical premium series either (P6: no premium/index-price-history "
+                "endpoint to derive one from). The only Lighter premium data that exists anywhere "
+                "is the ~3h52m P9 live websocket recording, which is far short of the two 4-day "
+                "archive windows this probe needs and is not a substitute for an archive."
+            ),
+            "missing_input": "historical Lighter premium",
+            "checked": {"path": f"/v1/lighter/funding/{probe_coin}",
+                        "sample_keys": sorted(probe_rows[0].keys()) if probe_rows else []},
+            "input_cadence": None,
+            "all": None,
+            "off_baseline": None,
+            "tol": None,
+            "windows": windows,
+        }
+        store.save_json("p10", "verdict_lighter.json", out)
+        print(out)
+        raise SystemExit(0)
+
     frames = []
     for s_ in sample:
         for a, b in win:
