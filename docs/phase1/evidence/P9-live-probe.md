@@ -347,9 +347,11 @@ empty-frame errors.
 - The Lighter conclusions in this note rest on 3h52m / 21 market-hours, not the 5h27m the original
   version implied. Task 15 part B, which reuses this recording as its only Lighter premium source,
   is bounded by the same 3h52m (28 market-hours after its own coverage filter, 16 off-baseline).
-- `probes/p09_live.py` still couples websocket-snapshot writing to a successful REST poll. Left
-  unchanged on purpose: the Phase 2 recorder is a separate build, and the requirements above are
-  where this is recorded.
+- `probes/p09_live.py` coupled websocket-snapshot writing to a successful REST poll at the time of
+  this run — that coupling is what cost the 95 minutes described above. It was decoupled afterwards
+  in commit `32bf4c0` (the snapshot write moved out of the poll's `try`, and the poll bounded by
+  `asyncio.wait_for(..., timeout=45)`), so the probe now satisfies requirements 1 and 3 above;
+  requirements 2, 4 and 5 remain unimplemented, and the Phase 2 recorder is still a separate build.
 
 ## Corrections log
 - **2026-09-20 (Task 15 part B)**: the stated run window (11:27:23Z → 16:54:35Z, "5h27m") was the
