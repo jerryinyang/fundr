@@ -27,3 +27,6 @@ packages = ["src/fundr"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+# The repo root on sys.path, so tests can `from scripts.x import y`. pytest's prepend import
+# mode adds tests/, not the root, and the `pytest` console script does not add the cwd.
+pythonpath = ["."]
