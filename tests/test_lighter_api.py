@@ -45,3 +45,18 @@ def test_fundings_frame():
     row = df.row(0, named=True)
     assert row["market_id"] == 1 and row["signed_rate"] == -0.0012 and row["rate_str"] == "0.0012"
     assert row["settle_time"].minute == 0
+
+
+def test_order_book_details_all_needs_no_market_id():
+    # Measured 2026-09-21: /api/v1/orderBookDetails with no market_id returns every perp market
+    # (235 of them) in one call, and is the only route carrying the funding parameters.
+    seen = {}
+
+    def handler(request):
+        seen["params"] = dict(request.url.params)
+        return httpx.Response(200, json={"code": 200, "order_book_details": [
+            {"market_id": 1, "symbol": "BTC", "funding_premium_multiplier": 100}]})
+
+    details = _client(handler).order_book_details_all()
+    assert seen["params"] == {}
+    assert details[0]["market_id"] == 1

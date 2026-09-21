@@ -33,6 +33,12 @@ class LighterAPI:
     def order_book_details(self, market_id: int) -> dict:
         return self.get("/api/v1/orderBookDetails", market_id=market_id)["order_book_details"][0]
 
+    def order_book_details_all(self) -> list[dict]:
+        """Every market's details in one call — measured 2026-09-21: 235 perp markets returned
+        with no `market_id` parameter. This is the only route carrying `funding_premium_multiplier`,
+        `base_interest_rate` and the two clamps, which vary by market."""
+        return self.get("/api/v1/orderBookDetails")["order_book_details"]
+
     def funding_rates(self) -> list[dict]:
         return self.get("/api/v1/funding-rates")["funding_rates"]
 
