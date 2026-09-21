@@ -30,10 +30,39 @@ def test_download_writes_file_and_ledger(tmp_path, monkeypatch):
 
 def test_download_refuses_over_budget(tmp_path, monkeypatch):
     arc, stub = _archive(tmp_path, monkeypatch)
-    params = {"Bucket": "b", "Key": "k", "RequestPayer": "requester"}
-    stub.add_response("head_object", {"ContentLength": 20 * 10**9}, params)  # 20 GB ≈ $1.80
+    # Priced against the real archive bucket (us-east-1, $0.09/GB): 40 GB ≈ $3.60. Deliberately
+    # several times any cap this project would plausibly set -- at 20 GB the fixture is $1.80,
+    # which a $2.00 Phase 2b cap would have swallowed, leaving this test asserting nothing.
+    params = {"Bucket": hl_archive.ARCHIVE_BUCKET, "Key": "k", "RequestPayer": "requester"}
+    stub.add_response("head_object", {"ContentLength": 40 * 10**9}, params)
     with stub, pytest.raises(hl_archive.BudgetExceeded):
-        arc.download("b", "k")
+        arc.download(hl_archive.ARCHIVE_BUCKET, "k")
+
+
+def test_egress_is_priced_per_bucket():
+    # Verified 2026-09-21 with unauthenticated HEADs reading `x-amz-bucket-region`: the archive
+    # is us-east-1 and the node-data bucket is ap-northeast-1. One global rate cannot price both.
+    assert hl_archive.egress_usd_per_gb(hl_archive.ARCHIVE_BUCKET) == 0.09
+    assert hl_archive.egress_usd_per_gb(hl_archive.NODE_BUCKET) == 0.114
+    # An unknown bucket is priced at the dearer region: the guard must never under-bill.
+    assert hl_archive.egress_usd_per_gb("something-else") == 0.114
+
+
+def test_ledger_prices_each_bucket_at_its_own_rate(tmp_path, monkeypatch):
+    size = 10**9  # 1 GB from each bucket
+    charged = {}
+    for bucket in (hl_archive.ARCHIVE_BUCKET, hl_archive.NODE_BUCKET):
+        arc, stub = _archive(tmp_path / bucket, monkeypatch)
+        data = b"x" * 8
+        params = {"Bucket": bucket, "Key": "k", "RequestPayer": "requester"}
+        stub.add_response("head_object", {"ContentLength": size}, params)
+        stub.add_response("get_object", {"Body": StreamingBody(io.BytesIO(data), len(data))},
+                          params)
+        with stub:
+            arc.download(bucket, "k")
+        charged[bucket] = arc.spent_usd()
+    assert charged[hl_archive.ARCHIVE_BUCKET] == pytest.approx(0.09 + 2 * hl_archive.REQUEST_USD)
+    assert charged[hl_archive.NODE_BUCKET] == pytest.approx(0.114 + 2 * hl_archive.REQUEST_USD)
 
 
 def test_list_keys_uses_requester_pays(tmp_path, monkeypatch):

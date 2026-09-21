@@ -10,9 +10,9 @@
 
 **Spec:** none — this plan is written directly from the research design and Phase 1's findings, per the user's instruction (the components already exist). Authorities: `docs/funding_research_design.md` (Phase 2 "Historical Data Collection" and its core-variable list), `docs/phase1/handoff.md` §2, §5, §7 and §8, `docs/phase1/data_audit.md` §1 and §4, `docs/phase2/dependency_map.md`.
 
-This revision folds in two independent reviews (2026-09-21): an executability review that ran the plan's probes, and a data-substance review that checked its numbers against the live APIs. Every number below was re-measured for this revision; where a reviewer's figure and the measurement disagree, the measurement is what appears here.
+This revision folds in three independent reviews (2026-09-21): an executability review that ran the plan's probes, a data-substance review that checked its numbers against the live APIs, and a third that caught a wrong correction the second round had introduced. Every number below was re-measured; where a reviewer's figure and the measurement disagree, the measurement is what appears here — **including where a reviewer was right about the direction and wrong about the size, and where an earlier round of this plan was simply wrong.**
 
-**Every code block and test in this plan was extracted and executed during the revision**: `uv run pytest -q` → **172 passed**, the number Task 9 expects. The files were then removed so the implementation session writes them itself, task by task, in TDD order. So a failing test in Step "run, expect failure" means the module is genuinely absent, not that the plan's code is broken.
+**Every code block and test in this plan was extracted and executed during the revision**: `uv run pytest -q` → **177 passed**, the number Task 9 expects. The files were then removed so the implementation session writes them itself, task by task, in TDD order. So a failing test in Step "run, expect failure" means the module is genuinely absent, not that the plan's code is broken.
 
 ## Global Constraints
 
@@ -25,12 +25,12 @@ This revision folds in two independent reviews (2026-09-21): an executability re
 - **Funding parameters are per market, not per venue.** Measured 2026-09-21 across Lighter's 235 perp markets: `funding_premium_multiplier` is 100 on 137, **50 on 96 and 1 on 2**; `base_interest_rate` is `0.0100` on 119, **`0.0032` on 89 and `0.0000` on 27**. Anything that assumes BTC's parameters — "the baseline is 0.00125 %/h", "off-baseline means |rate| > baseline" — is wrong on 98 of 235 markets. Task 2 persists the parameters so Phases 5, 7 and 11 can read them instead of assuming.
 - Backfills are **resumable and idempotent**: re-running must not duplicate rows or refetch what is already complete. Resume cursors are computed in UTC epoch milliseconds (`dt.epoch("ms")`), never via `datetime.timestamp()` — see Task 1.
 - Respect rate limits. Hyperliquid's info endpoint returned HTTP 429 during Phase 2a's validation over ~234 sequential calls; a retry with exponential backoff is mandatory for bulk work, **at page granularity** (a 429 on page 40 must not restart the coin), and only for errors a retry can fix (429, 5xx, transport/timeout). Lighter answers an unsupported parameter with a permanent HTTP 400 — retrying it six times only makes the failure slower.
-- AWS: the archive is requester-pays. `fundr.sources.hl_archive.BUDGET_USD` is currently `0.80`; the corrected measured full-archive cost is **$1.15** (see below), so Task 7 raises the cap deliberately and only with the user's explicit approval.
+- AWS: the archive is requester-pays, and **egress is priced per bucket** because the two buckets are in different regions (see Measured facts). `fundr.sources.hl_archive.BUDGET_USD` is currently `0.80`; the measured full-archive cost is **$0.922**, so Task 7 raises the cap to `1.20` deliberately and only with the user's explicit approval.
 
 ## Measured facts (2026-09-21, this revision's own live calls)
 
 - `s3://hyperliquid-archive/asset_ctxs/`: **1,218 files, 2023-05-20 → 2026-09-19, 10.109 GB compressed** (2023 0.69, 2024 2.64, 2025 3.95, 2026 2.82 GB). The span is 1,219 days, so exactly **one date is missing: 2026-07-08** — no key exists for it, in the live listing and in Phase 1's saved listing (`data/phase1/p01/listing.json`, 1,217 keys to 2026-09-18, same single gap). That day has no per-minute HL state and never will; it is a permanent hole Phase 7 must treat as missing, not as zero.
-- **Egress cost: $1.15, not $0.91.** `hl_archive.EGRESS_USD_PER_GB` was `0.09` (a US rate) while the bucket is in `ap-northeast-1`, whose published outbound rate is **$0.114/GB**. 10.109 GB × $0.114 = **$1.152**, plus 1,218 × 2 requests × $0.000005 = $0.012 → **$1.165 all-in**. This revision corrects the constant in the library. Note AWS's 100 GB/month free outbound allowance may make the *invoiced* amount $0; the guard deliberately counts the list price anyway.
+- **Egress cost: $0.922 — and the two buckets are in different regions.** Confirmed by unauthenticated HEAD requests reading the `x-amz-bucket-region` header: **`hyperliquid-archive` is `us-east-1` ($0.09/GB)** and **`hl-mainnet-node-data` is `ap-northeast-1` ($0.114/GB)**. So 10.109 GB × $0.09 = **$0.910**, plus 1,218 × 2 requests × $0.000005 = $0.012 → **$0.922 all-in**. A middle revision of this plan priced the archive at $0.114/GB and quoted $1.165; that was wrong. The mistake is worth naming because it is easy to repeat: requesting `hyperliquid-archive` through the `ap-northeast-1` endpoint answers `301 Moved Permanently` rather than an error, and boto3 follows the redirect, so a Tokyo client reads a Virginia bucket without ever complaining — **a redirecting endpoint is not evidence of region, the header is** (that 301 itself carries `x-amz-bucket-region: us-east-1`). `hl_archive.EGRESS_USD_PER_GB` is now a per-bucket mapping with a $0.114 default for unknown buckets, so nothing under-bills. AWS's 100 GB/month free outbound allowance may still make the *invoiced* amount $0; the guard deliberately counts list price.
 - **Parquet footprint, measured** by converting four real archive days already on disk (2023-05-20, 2025-02-21, 2025-12-05, 2026-09-17): parquet is **0.91–1.00× the `.lz4` size** (mean 0.95), so the full archive lands at **≈9.6 GB of parquet**, not the 15–25 GB estimated in review. With each `.lz4` deleted after its parquet is written, peak extra disk is ~10 GB plus one day's compressed file (≤14 MB). **72 GiB free on this machine today** — comfortable.
 - **Hyperliquid's own settled funding starts 2023-05-12T00:00:00.048Z** — measured directly on `fundingHistory` for BTC (`-0.0006133368`) and ETH, both with the same first timestamp `1683849600048`. That is **eight days before** the S3 archive's first day and closes handoff §8 action 5, which asked for exactly this call. The previous claim of 2023-05-20 was the archive's start, not the API's.
 - Hyperliquid universe: **234 markets, 56 flagged `isDelisted`**. `meta.universe` entries carry `name, szDecimals, maxLeverage, marginTableId, isDelisted, onlyIsolated, marginMode`.
@@ -44,7 +44,7 @@ This revision folds in two independent reviews (2026-09-21): an executability re
 
 These are things the research design or the handoff asks for that Phase 2b is **not** doing. They are written down so a later phase inherits a decision, not a silence.
 
-1. **Historical trades / aggregated flow are deferred.** The design names them a core Phase 2 variable. On HL they exist (`node_fills_by_block` from 2025-07-27, continued back by `node_fills` to 2025-05-25, whole-network files at ~$27.15/year — the cost does not scale down with fewer coins). On Lighter **no usable historical source exists**: `/api/v1/trades` is 400 without auth and 0xArchive's fills finalize 16.7–36 h late. Collecting HL-only flow would hand H3 an asymmetric feature set — exactly the confound handoff §5 (Phase 8) warns about. Decision: collect neither now; Phase 8 decides the symmetric feature set and may commission the HL pull then, with a venue-provenance flag.
+1. **Historical trades / aggregated flow are deferred.** The design names them a core Phase 2 variable. On HL they exist (`node_fills_by_block` from 2025-07-27, continued back by `node_fills` to 2025-05-25, whole-network files at **≈$34.4/year** — 300.7 GB/yr at `hl-mainnet-node-data`'s own `ap-northeast-1` rate of $0.114/GB, which is the bucket that really *is* in Tokyo; P3's $27.15 priced it at $0.09. The cost does not scale down with fewer coins). On Lighter **no usable historical source exists**: `/api/v1/trades` is 400 without auth and 0xArchive's fills finalize 16.7–36 h late. Collecting HL-only flow would hand H3 an asymmetric feature set — exactly the confound handoff §5 (Phase 8) warns about. Decision: collect neither now; Phase 8 decides the symmetric feature set and may commission the HL pull then, with a venue-provenance flag.
 2. **Derived hourly volume is deferred to Phase 7.** The handoff asks for raw *and* derived with a provenance flag. Phase 2b stores raw only: HL `day_ntl_vlm` (a running daily notional needing differencing with a UTC-midnight reset) and Lighter candle `v`/`V` (already per bucket). The differencing rule belongs with the feature code that consumes it, and doing it here would bake a reset-handling bug into the stored data. Recorded as a decision, not an oversight.
 3. **0xArchive stays free-tier.** Task 8 uses it only as a 30-day cross-check (handoff §8 action 6). No paid tier, no Lighter OI backfill; that is Phase 7's call per handoff §8 action 8.
 
@@ -125,7 +125,7 @@ asyncio_mode = "auto"
 pythonpath = ["."]
 ```
 
-Run: `uv run pytest -q` — expected: **116 passed**, unchanged. This step only widens the import path.
+Run: `uv run pytest -q` — expected: **118 passed**, unchanged. This step only widens the import path.
 
 - [ ] **Step 2: Write the failing tests** `tests/test_dataset.py`
 
@@ -544,7 +544,8 @@ from fundr import markets
 
 META = {"universe": [
     {"name": "BTC", "szDecimals": 5, "maxLeverage": 40, "marginTableId": 56},
-    {"name": "OLD", "szDecimals": 2, "maxLeverage": 3, "marginTableId": 5, "isDelisted": True},
+    {"name": "OLD", "szDecimals": 2, "maxLeverage": 3, "marginTableId": 5, "isDelisted": True,
+     "marginMode": "isolated"},
     {"name": "ETH", "szDecimals": 4, "maxLeverage": 25, "marginTableId": 55},
 ]}
 CTXS = [{"funding": "0.0000125"}, {"funding": "0.0"}, {"funding": "0.0000125"}]
@@ -553,7 +554,9 @@ BOOKS = [
     {"symbol": "BTC", "market_id": 1, "status": "active", "market_type": "perp",
      "created_at": "1737098461107", "maker_fee": "0.0000", "taker_fee": "0.0000",
      "liquidation_fee": "1.0000", "min_base_amount": "0.00007", "min_quote_amount": "10.000000",
-     "supported_size_decimals": 5, "supported_price_decimals": 1, "is_frozen": False},
+     "supported_size_decimals": 5, "supported_price_decimals": 1, "is_frozen": False,
+     "start_timestamp": 0, "end_timestamp": 0, "settlement_type": 0, "settlement_price": 0,
+     "settlement_cap": 0},
     {"symbol": "AMD", "market_id": 138, "status": "active", "market_type": "perp",
      "created_at": "1770669512153", "maker_fee": "0.0000", "taker_fee": "0.0000",
      "liquidation_fee": "1.0000", "min_base_amount": "0.0100", "min_quote_amount": "10.000000",
@@ -600,6 +603,7 @@ def test_hl_market_metadata_carries_listing_fields():
     row = df.filter(pl.col("coin") == "OLD").row(0, named=True)
     assert row["is_delisted"] is True
     assert row["sz_decimals"] == 2 and row["max_leverage"] == 3 and row["margin_table_id"] == 5
+    assert row["margin_mode"] == "isolated"
     assert df.filter(pl.col("coin") == "BTC")["is_delisted"].item() is False
 
 
@@ -616,6 +620,9 @@ def test_lighter_market_metadata_joins_funding_parameters():
     assert btc["base_interest_rate_pct"] == 0.01
     assert btc["taker_fee"] == 0.0 and btc["min_base_amount"] == 0.00007
     assert str(df.schema["listed_at"]).startswith("Datetime")
+    # Lighter dates no delisting, so the settlement block is the only exit information there is.
+    assert {"start_timestamp", "end_timestamp", "settlement_type", "settlement_price",
+            "settlement_cap"} <= set(df.columns)
 
 
 def test_lighter_market_metadata_flags_off_default_funding_parameters():
@@ -708,6 +715,7 @@ def hl_market_metadata(hl) -> pl.DataFrame:
         "sz_decimals": m.get("szDecimals"),
         "max_leverage": m.get("maxLeverage"),
         "margin_table_id": m.get("marginTableId"),
+        "margin_mode": m.get("marginMode"),
         "only_isolated": bool(m.get("onlyIsolated", False)),
     } for m in meta["universe"]]).sort("coin")
 
@@ -744,6 +752,14 @@ def lighter_market_metadata(api) -> pl.DataFrame:
             "supported_size_decimals": b.get("supported_size_decimals"),
             "supported_price_decimals": b.get("supported_price_decimals"),
             "is_frozen": bool(b.get("is_frozen", False)),
+            # The settlement block: Lighter dates no delisting, so for an expiring or settled
+            # market these four fields are the only forward-looking exit information that
+            # exists. Cheap to keep, impossible to reconstruct later.
+            "start_timestamp": b.get("start_timestamp"),
+            "end_timestamp": b.get("end_timestamp"),
+            "settlement_type": b.get("settlement_type"),
+            "settlement_price": b.get("settlement_price"),
+            "settlement_cap": b.get("settlement_cap"),
         })
     return (pl.DataFrame(rows)
             .with_columns(
@@ -1061,7 +1077,9 @@ git commit -m "feat: backfill Hyperliquid settled funding"
 
 **Paging and retry granularity**, as in Task 3: `LighterAPI.fundings_all` pages internally, so the script pages by 700-hour window around `LighterAPI.fundings` and retries each window on its own. `fundings_all` is left untouched for its existing callers.
 
-**The funding period is measured, not assumed.** Phase 1 established that the period is a per-market configuration and said to assert `1h` per market. After each market is merged, `markets.funding_period_s` measures the modal gap; anything other than 3600 s is collected into a list printed at the end and written to the manifest, and flagged by the QA. Measured 2026-09-21: exactly 3600 s on markets 1 and 138. A market with **no** rows (market 173, SPACEX, `inactive`, returns zero rows) is reported, not treated as an error.
+**The funding period is measured, not assumed.** Phase 1 established that the period is a per-market configuration and said to assert `1h` per market. After each market is merged, `markets.funding_period_s` measures the modal gap; anything other than 3600 s is collected into a list printed at the end and written to the manifest, and flagged by the QA. Measured 2026-09-21: exactly 3600 s on markets 1, 138 and 173.
+
+**An inactive market usually has history; it just stopped.** Market 173 (SPACEX, `inactive`) returns **985 settlements, 2026-05-08 20:00Z → 2026-06-18 20:00Z, with no gaps** — a complete life, measured over its full range. It returns zero rows only for a *recent* window, because nothing has settled since June, and an earlier draft of this plan generalised a 20-hour probe into "this market has no history". So: an empty frame is normal and reported, never an error; but the expectation for an inactive market is a complete series that **ends**, and the QA anchors its coverage to its own last row rather than to now (Task 8).
 
 - [ ] **Step 1: Write the failing test** `tests/test_backfill_lighter_funding.py`
 
@@ -1110,7 +1128,9 @@ def test_settle_time_is_datetime_and_sorted():
 
 
 def test_empty_history_returns_empty_frame():
-    # Market 173 (SPACEX, inactive) really does return zero rows -- normal, not an error.
+    # A market that has stopped settling returns zero rows for any recent window -- market 173
+    # (SPACEX) last settled 2026-06-18, though its 985-hour history is complete and intact. An
+    # empty frame is something to report, never something to raise on.
     df = backfill_market(FakeLighter([]), MARKET, end_s=10_000, sleep=lambda s: None)
     assert df.is_empty()
 
@@ -1240,7 +1260,7 @@ Expected: 4 passed.
 
 Run: `uv run python scripts/backfill_lighter_funding.py --market-ids 1 138 173`
 then: `uv run python scripts/backfill_lighter_funding.py`
-Expected: BTC (market 1) ≈ 14,600+ hours from 2025-01-17 with period 3600 s; AMD (138) present with period 3600 s; SPACEX (173) reported as "no history" rather than crashing. Every perp market attempted (235 today). Re-run once to confirm idempotence.
+Expected: BTC (market 1) ≈ 14,600+ hours from 2025-01-17 with period 3600 s; AMD (138) present with period 3600 s; **SPACEX (173) ≈ 985 hours, 2026-05-08 20:00Z → 2026-06-18 20:00Z, period 3600 s** — an inactive market with a complete history that ends, not an empty one. Every perp market attempted (235 today). Re-run once to confirm idempotence; on the re-run SPACEX must add **0** new rows, which is the cleanest idempotence check available because nothing about it can change any more.
 
 - [ ] **Step 6: Commit**
 
@@ -1517,26 +1537,34 @@ git commit -m "feat: backfill Lighter price, volume and mark-price history"
 
 ---
 
-### Task 6: Correct the archive egress rate — **already applied with this revision**
+### Task 6: Per-bucket egress pricing — **already applied with this revision**
 
-**Files:** `src/fundr/sources/hl_archive.py`, `docs/phase1/data_audit.md`
+**Files:** `src/fundr/sources/hl_archive.py`, `tests/test_hl_archive.py`, `docs/phase1/data_audit.md`
 
-Both changes are one-liners that make every cost figure in this plan true, so they shipped with
-the plan revision itself rather than waiting for an implementation session. This task is a
-verification step, kept in place so the sequence stays legible.
+These changes make every cost figure in this plan true, so they shipped with the plan revision
+itself rather than waiting for an implementation session. This task is a verification step, kept
+in place so the sequence stays legible.
 
-- `EGRESS_USD_PER_GB` is now `0.114` — the `ap-northeast-1` outbound list price, where both
-  buckets live; the previous `0.09` was the US rate. The comment records that AWS's 100 GB/month
-  free outbound allowance may make the invoice $0 while the guard deliberately counts list price.
-- `docs/phase1/data_audit.md`'s Done check carries a correction line: Phase 1's recorded
-  **$0.01184** was computed with the same wrong constant and is **≈$0.0149** at the corrected rate
-  (89 billed operations, 0.1267 GB). Phase 1's evidence notes are deliberately **not** rewritten —
-  they record what was measured at the time, and a correction line is the honest form of the fix.
+- `EGRESS_USD_PER_GB` is now a **per-bucket mapping** — `hyperliquid-archive` → `0.09`
+  (`us-east-1`), `hl-mainnet-node-data` → `0.114` (`ap-northeast-1`) — with a `0.114` default for
+  any unknown bucket, so an unrecognised bucket can only ever be over-billed, never under. `_charge`
+  takes the bucket it is charging for and records it in each ledger line. The module docstring
+  records how the regions were established (`x-amz-bucket-region`) and warns that a redirecting
+  endpoint is not evidence of region — the trap a middle revision of this plan fell into.
+- `tests/test_hl_archive.py` gains two tests (`test_egress_is_priced_per_bucket`,
+  `test_ledger_prices_each_bucket_at_its_own_rate`) and its over-budget fixture is now priced
+  against the real archive bucket. The repo baseline is therefore **118 tests**, not 116.
+- `docs/phase1/data_audit.md`'s Done check carries a correction line: repricing Phase 1's ledger
+  **per bucket** (archive 0.0875 GB over 61 calls at $0.09, node data 0.0392 GB over 28 at $0.114)
+  gives **$0.01278** against the recorded $0.01184 — a $0.0009 difference, almost all of it from
+  the node-data bucket. The line also states plainly that the earlier $0.0149 correction was wrong
+  and why. Phase 1's evidence notes are deliberately **not** rewritten — they record what was
+  measured at the time, and a correction line is the honest form of the fix.
 
 - [ ] **Step 1: Verify**
 
 Run: `uv run pytest -q`
-Expected: all passing. `tests/test_hl_archive.py::test_download_refuses_over_budget` uses a 20 GB fixture, which is now $2.28 rather than $1.80 — still far over the current $0.80 cap, so the test is unaffected here. Task 7 revisits that fixture when it raises the cap.
+Expected: **118 passed**. `tests/test_hl_archive.py::test_download_refuses_over_budget` now prices its fixture against the real archive bucket at $0.09/GB: 40 GB ≈ $3.60, three times the cap Task 7 asks for. That bump is load-bearing rather than cosmetic — at the true rate the old 20 GB fixture is **$1.80**, which a $2.00 cap (what a middle revision of this plan proposed) would have swallowed silently, leaving the test asserting nothing at all.
 
 ---
 
@@ -1552,7 +1580,7 @@ are built from ([handoff §2](../../phase1/handoff.md)).
 - Modify: `src/fundr/sources/hl_archive.py` (budget constant), `tests/test_hl_archive.py` (budget fixture)
 - Test: `tests/test_backfill_hl_archive.py`
 
-**Measured cost: $1.15** — 1,218 files, 10.109 GB compressed, egress at $0.114/GB in `ap-northeast-1`, plus $0.012 of request charges → **$1.165 all-in**. The existing guard `BUDGET_USD = 0.80` would refuse partway through. (The earlier figure of $0.91 in this plan used the US egress rate; Task 6 corrected it.)
+**Measured cost: $0.922** — 1,218 files, 10.109 GB compressed, egress at `hyperliquid-archive`'s own rate of **$0.09/GB (`us-east-1`, confirmed by `x-amz-bucket-region`)** = $0.910, plus $0.012 of request charges. The existing guard `BUDGET_USD = 0.80` would refuse with about 90% of the archive downloaded, which is the worst possible place to stop. (A middle revision of this plan quoted $1.165 by pricing this bucket as Tokyo; only `hl-mainnet-node-data` is. Task 6 fixed the pricing.)
 
 **Where it writes, and what that does to the spend guard.** `HLArchive.download` caches under `store.data_root()`, which defaults to `data/phase1` — the directory this plan forbids writing to, and where ~10 GB would land. So every command in this task runs with **`FUNDR_DATA=data/phase2`** and constructs `HLArchive(ledger=Path("data/phase2/aws_ledger.jsonl"))` explicitly. The consequence, stated plainly: the guard then counts **Phase 2b's spend only**, starting from zero, and Phase 1's ledger stays untouched as Phase 1's record. That is the intent — the raised cap is a Phase 2b budget, not a lifetime one — but it means the cap no longer protects against total historical spend, and anyone reading `data/phase2/aws_ledger.jsonl` is reading this phase's bill, not the project's.
 
@@ -1562,20 +1590,21 @@ are built from ([handoff §2](../../phase1/handoff.md)).
 
 **The completeness record is itself resumable.** It is the record Step 9 reports from, so a run that writes only its own days would erase every earlier day's measurement. It is read, has the dates this run re-fetched removed, is concatenated with the fresh rows and de-duplicated on `(date, coin)`.
 
-- [ ] **Step 1: Ask the user.** Message: "The Hyperliquid per-minute archive is 1,218 files, 10.11 GB, and costs **$1.15** in `ap-northeast-1` egress (plus ~$0.01 of request charges) — the code's cap is $0.80. AWS's 100 GB/month free outbound allowance may make the actual invoice $0, but the guard counts list price. It gives per-minute open interest, premium and prices for every market back to 2023, which Phase 3's point-in-time universe and Phase 7's features need, and there is no free substitute. Raise the cap to $2 and proceed?" **Wait for a yes.** Without it, stop and do the other tasks — but see "After Task 9": this task is not optional, it is deferred, and the phase's conclusion changes if it is skipped.
+- [ ] **Step 1: Ask the user.** Message: "The Hyperliquid per-minute archive is 1,218 files, 10.11 GB, and costs **$0.92** — $0.91 of egress at $0.09/GB (the bucket is in `us-east-1`, not Tokyo as an earlier estimate assumed) plus ~$0.01 of request charges. The code's cap is $0.80, so it would refuse about 90% of the way through. AWS's 100 GB/month free outbound allowance may make the actual invoice $0, but the guard counts list price. The archive gives per-minute open interest, premium and prices for every market back to 2023, which Phase 3's point-in-time universe and Phase 7's features need, and there is no free substitute. Raise the cap to $1.20 and proceed?" **Wait for a yes.** Without it, stop and do the other tasks — but see "After Task 9": this task is not optional, it is deferred, and the phase's conclusion changes if it is skipped.
 
-- [ ] **Step 2: Raise the cap** in `src/fundr/sources/hl_archive.py`: `BUDGET_USD = 2.00`, with a comment naming the measured $1.165 Phase 2b backfill and the date.
+- [ ] **Step 2: Raise the cap** in `src/fundr/sources/hl_archive.py`: `BUDGET_USD = 1.20`, with a comment naming the measured $0.922 Phase 2b backfill and the date. $1.20 is deliberately close to the measured cost: it covers the full pull plus roughly 300 quarantine re-fetches and still stops a runaway well short of a surprise. A cap of $2.00 would be worse than useless here — see the fixture note below.
 
-  **Also raise the over-budget fixture** in `tests/test_hl_archive.py::test_download_refuses_over_budget` from **20 GB to 40 GB**. At 20 GB the fixture costs $2.28 against a $2.00 cap — it still raises, but by 14%, which is not a fixture that states its intent. 40 GB is $4.56, unambiguously over. This strengthens the test; it does not weaken it. Update the comment to `# 40 GB ≈ $4.56`.
+  The over-budget fixture in `tests/test_hl_archive.py::test_download_refuses_over_budget` is already 40 GB (raised with this revision, priced against the real archive bucket): ≈**$3.60** at $0.09/GB, three times the new cap. Confirm it still fails as intended after the cap change. It matters that it is not 20 GB: at the true rate 20 GB is **$1.80**, which a $2.00 cap would have swallowed silently — the test would have passed by doing nothing.
 
 - [ ] **Step 3: Write the failing test** `tests/test_backfill_hl_archive.py`
 
 ```python
 import lz4.frame
 import polars as pl
+import pytest
 
 from scripts.backfill_hl_archive import (
-    convert_day, day_completeness, merge_completeness, needs_fetch, parse_day)
+    check_data_root, convert_day, day_completeness, merge_completeness, needs_fetch, parse_day)
 
 
 def _raw(rows_per_coin: dict[str, int]) -> pl.DataFrame:
@@ -1643,6 +1672,32 @@ def test_needs_fetch_is_true_for_a_quarantined_short_day(tmp_path, monkeypatch):
     assert needs_fetch("2026-09-15", None) is True          # no record == unmeasured == fetch
 
 
+def test_a_permanently_short_day_is_not_re_fetched(tmp_path, monkeypatch):
+    # 2023-05-20 is the archive's first file and starts at 02:50:04Z: all 21 coins hold exactly
+    # 1,270 of 1,440 minutes (0.8819, measured on the real file). No re-download will ever fill
+    # it, so quarantining it means re-paying its egress on every run forever.
+    monkeypatch.setenv("FUNDR_PHASE2_DATA", str(tmp_path))
+    path = tmp_path / "hl_asset_ctxs" / "date=2023-05-20" / "part.parquet"
+    path.parent.mkdir(parents=True)
+    pl.DataFrame({"x": [1]}).write_parquet(path)
+    assert needs_fetch("2023-05-20", _completeness("2023-05-20", "BTC", 0.8819)) is False
+    # ... but it is still fetched the first time, when no parquet exists.
+    other = tmp_path / "elsewhere"
+    monkeypatch.setenv("FUNDR_PHASE2_DATA", str(other))
+    assert needs_fetch("2023-05-20", None) is True
+
+
+def test_check_data_root_refuses_a_split_tree(tmp_path, monkeypatch):
+    # The guard that stops ~10 GB of .lz4 landing in data/phase1 because someone forgot an env
+    # var: HLArchive caches under $FUNDR_DATA, everything else writes under $FUNDR_PHASE2_DATA.
+    monkeypatch.setenv("FUNDR_PHASE2_DATA", str(tmp_path / "phase2"))
+    monkeypatch.setenv("FUNDR_DATA", str(tmp_path / "phase1"))
+    with pytest.raises(SystemExit, match="refusing to run"):
+        check_data_root()
+    monkeypatch.setenv("FUNDR_DATA", str(tmp_path / "phase2"))
+    check_data_root()
+
+
 def test_convert_day_deletes_the_lz4(tmp_path, monkeypatch):
     # Global constraint: the whole archive is 10.1 GB compressed. Keeping every .lz4 alongside
     # its parquet doubles the footprint for no benefit -- the parquet is the artefact.
@@ -1665,16 +1720,20 @@ Expected: FAIL — module not found.
 ```python
 """Backfill Hyperliquid's per-minute market state (`asset_ctxs`) from the requester-pays archive.
 
-Billed: $1.165 for the full range as measured 2026-09-21 (1,218 files, 10.109 GB, $0.114/GB in
-ap-northeast-1 plus $0.012 of requests). Run it with FUNDR_DATA=data/phase2 -- `HLArchive`
-caches downloads under `store.data_root()`, which defaults to data/phase1, the one directory
-this phase must not write to.
+Billed: $0.922 for the full range as measured 2026-09-21 (1,218 files, 10.109 GB at $0.09/GB --
+`hyperliquid-archive` is in us-east-1, confirmed by `x-amz-bucket-region` -- plus $0.012 of
+requests). Run it with FUNDR_DATA=data/phase2: `HLArchive` caches downloads under
+`store.data_root()`, which defaults to data/phase1, the one directory this phase must not write
+to, and ~10 GB would land there. `check_data_root()` refuses to start otherwise rather than
+trusting whoever typed the command to remember.
 
 Resumable, and NOT merely file-existence-resumable: Phase 1 found recent days can be badly
 incomplete (2026-09-15 held 156 of 1,440 minutes), and the handoff requires quarantining short
 days and re-downloading them later to pick up the venue's backfill. A day is skipped only when
-its RECORDED completeness clears the bar. Each .lz4 is deleted once its parquet is written; the
-parquet is the artefact and the compressed cache would otherwise reach 10 GB.
+its RECORDED completeness clears the bar -- unless it is short for a STRUCTURAL reason it will
+never outgrow, which no amount of re-downloading fixes and which would otherwise re-pay its
+egress on every run. Each .lz4 is deleted once its parquet is written; the parquet is the
+artefact and the compressed cache would otherwise reach 10 GB.
 
 One date has no key at all and never will: 2026-07-08 (verified against the live listing and
 Phase 1's saved listing). Treat it as missing, not as zero."""
@@ -1684,7 +1743,7 @@ from pathlib import Path
 
 import polars as pl
 
-from fundr import dataset
+from fundr import dataset, store
 from fundr.sources.hl_archive import ARCHIVE_BUCKET, HLArchive, parse_time, read_csv_lz4
 
 DATASET = "hl_asset_ctxs"
@@ -1692,7 +1751,30 @@ COMPLETENESS = "hl_asset_ctxs_completeness"
 SOURCE = "hl:s3:asset_ctxs"
 MINUTES_PER_DAY = 1440
 QUARANTINE_BELOW = 0.99
-LEDGER = Path("data/phase2/aws_ledger.jsonl")
+# Days that are short for a reason that will never change. Measured on the real file, not
+# assumed: 2023-05-20 holds 26,670 rows for 21 coins, every one of them exactly 1,270 minutes
+# (0.8819), and the file starts at 02:50:04Z -- the archive simply begins mid-morning. Without
+# this marker the quarantine re-downloads it on every single run, forever, for nothing.
+PERMANENT_SHORT = {"2023-05-20": "the archive's first file begins 02:50:04Z (measured: 0.8819)"}
+
+
+def ledger_path() -> Path:
+    """The spend ledger belongs beside the data it paid for, wherever that root points."""
+    return dataset.root() / "aws_ledger.jsonl"
+
+
+def check_data_root() -> None:
+    """Refuse to run unless downloads and datasets land in the same Phase 2b tree.
+
+    `HLArchive.download` caches under `store.data_root()` ($FUNDR_DATA, default data/phase1)
+    while everything else here writes under `dataset.root()` ($FUNDR_PHASE2_DATA, default
+    data/phase2). If they disagree, a forgotten env var quietly puts ~10 GB of .lz4 into Phase
+    1's irreplaceable directory -- the one thing this plan's global constraints forbid."""
+    cache, data = store.data_root().resolve(), dataset.root().resolve()
+    if cache != data:
+        raise SystemExit(
+            f"refusing to run: downloads would cache under {cache} while datasets go to {data}.\n"
+            f"Re-run with FUNDR_DATA={dataset.root()} so both land in Phase 2b's tree.")
 
 
 def parse_day(raw: pl.DataFrame) -> pl.DataFrame:
@@ -1719,9 +1801,12 @@ def needs_fetch(date: str, recorded: pl.DataFrame | None, *,
     """A day is done only if its parquet exists AND its recorded completeness clears the bar.
 
     The day's MEDIAN per-coin completeness is used, not its minimum: a coin listed mid-day is
-    legitimately short and would quarantine every day forever."""
+    legitimately short and would quarantine every day forever. A day in PERMANENT_SHORT is
+    short by construction and is never re-fetched once present."""
     if not dataset.partition_path(DATASET, date=date).exists():
         return True
+    if date in PERMANENT_SHORT:
+        return False
     if recorded is None or recorded.is_empty():
         return True
     day = recorded.filter(pl.col("date") == date)
@@ -1743,10 +1828,12 @@ def main() -> None:
     ap.add_argument("--from-date", default=None, help="YYYYMMDD; default: the archive's start")
     ap.add_argument("--to-date", default=None)
     ap.add_argument("--limit", type=int, default=None, help="stop after N days (for a trial run)")
-    ap.add_argument("--ledger", default=str(LEDGER))
+    ap.add_argument("--ledger", default=None, help="default: <dataset root>/aws_ledger.jsonl")
     args = ap.parse_args()
 
-    arc = HLArchive(ledger=Path(args.ledger))
+    check_data_root()
+    ledger = Path(args.ledger) if args.ledger else ledger_path()
+    arc = HLArchive(ledger=ledger)
     keys = sorted(k["key"] for k in arc.list_keys(ARCHIVE_BUCKET, "asset_ctxs/"))
     if args.from_date:
         keys = [k for k in keys if k.split("/")[-1][:8] >= args.from_date]
@@ -1787,14 +1874,18 @@ def main() -> None:
                   .sort("median_completeness"))
         print("\nWorst twenty days by median per-coin completeness:")
         print(by_day.head(20))
-        print(f"days still below {QUARANTINE_BELOW}: "
-              f"{int((by_day['median_completeness'] < QUARANTINE_BELOW).sum())}")
+        still_short = by_day.filter(
+            (pl.col("median_completeness") < QUARANTINE_BELOW)
+            & ~pl.col("date").is_in(list(PERMANENT_SHORT)))
+        print(f"days still below {QUARANTINE_BELOW} and eligible for re-fetch: "
+              f"{still_short.height} (excluding {len(PERMANENT_SHORT)} permanently short)")
     dataset.update_manifest(DATASET, {"source": SOURCE, "days_written": done,
                                       "days_skipped": skipped,
                                       "days_requarantined": requarantined,
                                       "missing_from_archive": ["2026-07-08"],
                                       "spend_usd": arc.spent_usd(),
-                                      "ledger": args.ledger,
+                                      "ledger": str(ledger),
+                                      "permanently_short": sorted(PERMANENT_SHORT),
                                       "fetched_at_ms": int(time.time() * 1000)})
     print(f"\n{DATASET}: {done} days written, {skipped} already complete, "
           f"total Phase 2b spend ${arc.spent_usd():.4f}")
@@ -1807,20 +1898,25 @@ if __name__ == "__main__":
 - [ ] **Step 6: Run, expect pass**
 
 Run: `uv run pytest tests/test_backfill_hl_archive.py tests/test_hl_archive.py -v`
-Expected: 10 passed (7 new + 3 existing, with the raised fixture).
+Expected: 14 passed (9 new + 5 existing).
 
-- [ ] **Step 7: Trial run of five days, then the full range**
+- [ ] **Step 7: Confirm the guard fires before spending anything**
+
+Run: `uv run python scripts/backfill_hl_archive.py --limit 1` **without** `FUNDR_DATA`.
+Expected: an immediate `refusing to run: downloads would cache under .../data/phase1 while datasets go to .../data/phase2`, exit code 1, **no S3 call and no ledger line**. This is the guard that stops ~10 GB landing in Phase 1's directory; see it work once before trusting it.
+
+- [ ] **Step 8: Trial run of five days, then the full range**
 
 Run: `FUNDR_DATA=data/phase2 uv run python scripts/backfill_hl_archive.py --limit 5`
-Check the spend line, that `data/phase2/s3/` is empty afterwards (the `.lz4` files were deleted), and one day's parquet. Then:
+Check the spend line, that `data/phase2/s3/` is empty afterwards (the `.lz4` files were deleted), that `data/phase2/aws_ledger.jsonl` exists (and that `data/phase1/aws_ledger.jsonl` is **untouched** — compare its line count before and after), and one day's parquet. Then:
 `FUNDR_DATA=data/phase2 uv run python scripts/backfill_hl_archive.py`
-Expected: 1,217 days fetched (1,218 keys minus the 5 already done, and **no key for 2026-07-08**), total spend ≈ $1.17, no `BudgetExceeded`. Re-run once: every complete day is skipped and only quarantined days are re-fetched — the log's `N already complete / M to fetch` line says which.
+Expected: 1,213 days fetched (1,218 keys minus the 5 already done, and **no key for 2026-07-08**), total spend ≈ **$0.93**, no `BudgetExceeded`. Re-run once: every complete day is skipped, 2023-05-20 is skipped as permanently short rather than re-fetched, and only genuinely quarantined days come back — the log's `N already complete / M to fetch (K re-fetched from quarantine)` line says which.
 
-- [ ] **Step 8: Re-run the quarantine a day later.** The venue backfills late files. Run the script again after 24 h and confirm that the days it re-fetched came back more complete. Record the before/after in the coverage doc; if a day stays short for a week, it is permanent and Phase 7 must treat it as missing.
+- [ ] **Step 9: Re-run the quarantine a day later.** The venue backfills late files. Run the script again after 24 h and confirm that the days it re-fetched came back more complete. Record the before/after in the coverage doc. If a day stays short for a week it is permanent: add it to `PERMANENT_SHORT` with the measured reason, exactly as 2023-05-20 is, so it stops costing egress — and Phase 7 must treat its missing minutes as missing.
 
-- [ ] **Step 9: Report completeness honestly.** Add a section to `docs/phase2/backfill_coverage.md`: the days whose median completeness is materially below 1.0, whether they cluster (Phase 1 found recent days do), **the permanently missing 2026-07-08**, and the resulting caveat for Phase 7.
+- [ ] **Step 10: Report completeness honestly.** Add a section to `docs/phase2/backfill_coverage.md`: the days whose median completeness is materially below 1.0, whether they cluster (Phase 1 found recent days do), **the permanently missing 2026-07-08**, and the resulting caveat for Phase 7.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add scripts/backfill_hl_archive.py tests/test_backfill_hl_archive.py \
@@ -1841,14 +1937,15 @@ git commit -m "feat: backfill Hyperliquid per-minute market state"
 - Consumes: `dataset`, `fundr.analysis.gap_scan`, `fundr.markets`, `fundr.sources.oxarchive.OXArchive`.
 - Produces:
   - `coverage_row(key, df, *, time_col, expected_start=None, expected_end=None, start_source="data") -> dict`
-  - `coverage(name, key, *, time_col, expected_starts=None, expected_end=None) -> pl.DataFrame` — the per-dataset table, built from `coverage_row`; **implemented, not just promised**
+  - `coverage(frames: dict[str, pl.DataFrame], *, time_col, expected_starts=None, expected_ends=None, expected_end=None) -> pl.DataFrame` — the per-dataset table, built from `coverage_row`; **implemented, and its signature is the one the code actually has**. It takes the already-loaded frames (what `main` has in hand), not a dataset name and key — the declaration here and the definition below were written against each other and must stay that way
   - `match_symbols(hl_symbols, lighter_symbols) -> dict`
   - `cross_venue(hl_by_symbol, li_by_symbol) -> pl.DataFrame` — per symbol pair: overlapping hours, hours present on both, correlation of `signed_rate_fraction`
   - `lag_scan(hl_by_symbol, li_by_symbol, lags=(-1, 0, 1)) -> pl.DataFrame` and `alignment_verdict(lag_table) -> str`
   - `roster_diff(archive_coins, meta_coins) -> dict`
   - `vendor_crosscheck(ox, venue, symbol, ours, *, days=30) -> dict`
   - a written report, and a **non-zero exit code** if the alignment verdict fails
-- **Four datasets, not two.** `hl_funding`, `lighter_funding`, `lighter_candles` and `hl_asset_ctxs` are all reported. A dataset that is absent (the archive, if Task 7 was declined) is reported as absent rather than skipped silently.
+- **Five datasets, not two.** `hl_funding`, `lighter_funding`, `lighter_candles`, `lighter_mark_candles` and `hl_asset_ctxs` are all reported. A dataset that is absent (the archive, if Task 7 was declined) is reported as absent rather than skipped silently. Mark candles are not a formality: measured on market 138 (AMD), the trade candles start **2026-02-09 21:00Z** — 22 minutes after listing — while the mark candles start **2026-02-18 05:00Z**, an **8-day head gap** in a series Phase 7 would otherwise join straight onto the other one. Collecting a dataset the QA never measures is how that ships unnoticed.
+- **A market that stopped settling is not a market with a coverage hole.** Lighter market 173 (SPACEX, `inactive`) has a complete 985-hour history from 2026-05-08 20:00Z to 2026-06-18 20:00Z and nothing after — measured. Scored against "now" it would read ~30% covered and head the worst-ten table forever. So the tail anchor is applied per market: `active` markets are measured to the last complete hour, `inactive` ones to their own last row, with `last` reported so a reader sees when they stopped. Lighter publishes **no delisting timestamp at all** (Phase 1), so that last row is the only exit date this phase can offer Phase 3.
 - **The denominator is not self-referential.** Expected hours run from the market's **listing** (Lighter `created_at` from the Task 2 snapshot; HL from the coin's first appearance in the archive's completeness record, falling back to the coin's own first settled hour with `expected_start_source` recording which) to the **last complete hour now** — not from the data's own min and max, under which a fetch truncated at both ends scores a perfect 1.0. Two caveats to read the numbers with: a listing-derived start is a **lower bound**, so `coverage_row` takes whichever of proxy and first row is earlier (HL's funding history predates the archive by eight days, and a literal proxy would score BTC above 1.0); and the HL proxy is accurate only **to the day**, so up to 23 hours of `missing_head_hours` is expected noise — only heads materially longer than a day mean anything.
 - **Symbol matching is a known hazard** (Phase 1): Hyperliquid uses `kPEPE`-style prefixes where Lighter uses `1000PEPE`. The QA must report unmatched symbols on both sides explicitly rather than silently intersecting — Phase 3 owns the alias table, but Phase 2b must surface how many markets are affected.
 - **Hyperliquid's settlement-stamp convention is re-tested here** — it is an inference, and this is the cheapest place to check it. If the lag-0 cross-venue correlation is not the strongest of {−1, 0, +1}, the alignment Target B rests on is wrong and the phase stops.
@@ -1864,7 +1961,7 @@ import polars as pl
 import pytest
 
 from scripts.qa_backfill import (
-    alignment_verdict, coverage_row, cross_venue, lag_scan, match_symbols, roster_diff,
+    alignment_verdict, coverage, coverage_row, cross_venue, lag_scan, match_symbols, roster_diff,
     vendor_crosscheck, worst_by_coverage)
 
 
@@ -1907,6 +2004,19 @@ def test_coverage_row_counts_a_truncated_tail():
                        expected_end=datetime(2026, 1, 1, 12))
     assert row["missing_tail_hours"] == 3
     assert row["coverage"] < 1.0
+
+
+def test_coverage_anchors_an_inactive_market_to_its_own_last_row():
+    # Lighter 173 (SPACEX) settled 985 complete hours and stopped on 2026-06-18. Measured to
+    # "now" it would read ~30% and head the worst-ten table forever; measured to its own end it
+    # is what it actually is -- complete, and over.
+    dead = {"SPACEX": _funding("SPACEX", 10)}
+    now = datetime(2026, 6, 1)
+    scored_to_now = coverage(dead, time_col="settle_time", expected_end=now)
+    scored_to_its_end = coverage(dead, time_col="settle_time",
+                                 expected_ends={"SPACEX": None}, expected_end=now)
+    assert scored_to_now["coverage"].item() < 0.01
+    assert scored_to_its_end["coverage"].item() == 1.0
 
 
 def test_match_symbols_reports_unmatched_both_ways():
@@ -2047,15 +2157,23 @@ def coverage_row(key: str, df: pl.DataFrame, *, time_col: str,
 
 def coverage(frames: dict[str, pl.DataFrame], *, time_col: str,
              expected_starts: dict[str, datetime] | None = None,
+             expected_ends: dict[str, datetime | None] | None = None,
              expected_end: datetime | None = None) -> pl.DataFrame:
-    """The per-dataset coverage table. `expected_starts` maps key -> listing time; a key that is
-    absent from it falls back to its own first row, and says so in `expected_start_source`."""
+    """The per-dataset coverage table.
+
+    `expected_starts` maps key -> listing time; a key absent from it falls back to its own first
+    row and says so in `expected_start_source`. `expected_ends` overrides the tail anchor per
+    key, with an explicit None meaning "measure this market to its own last row" -- which is the
+    right answer for a market that has stopped settling (Lighter 173 ended 2026-06-18 and would
+    otherwise score ~30% forever). `expected_end` is the default for keys it does not name."""
     expected_starts = expected_starts or {}
+    expected_ends = expected_ends or {}
     rows = []
     for key, df in frames.items():
         start = expected_starts.get(key)
+        end = expected_ends.get(key, expected_end) if key in expected_ends else expected_end
         rows.append(coverage_row(key, df, time_col=time_col, expected_start=start,
-                                 expected_end=expected_end,
+                                 expected_end=end,
                                  start_source="listing" if start else "data"))
     return pl.DataFrame(rows) if rows else pl.DataFrame()
 
@@ -2179,15 +2297,31 @@ def _load(name: str, key: str) -> dict[str, pl.DataFrame]:
     return out
 
 
-def _lighter_listings() -> dict[str, datetime]:
-    """Listing times from the newest Task 2 snapshot, keyed by the symbol `_load` keys on."""
+def _lighter_metadata() -> pl.DataFrame | None:
+    """The newest Task 2 snapshot, or None if Task 2 has not run."""
     base = dataset.root() / "markets" / "venue=lighter"
     parts = sorted(base.glob("date=*/part.parquet")) if base.exists() else []
-    if not parts:
+    return pl.read_parquet(parts[-1]) if parts else None
+
+
+def _lighter_listings(meta: pl.DataFrame | None) -> dict[str, datetime]:
+    """Listing times, keyed by the symbol `_load` keys on."""
+    if meta is None:
         return {}
-    meta = pl.read_parquet(parts[-1])
     return {row["symbol"]: row["listed_at"] for row in meta.iter_rows(named=True)
             if row["symbol"] and row["listed_at"]}
+
+
+def _lighter_tail_anchors(meta: pl.DataFrame | None, end: datetime) -> dict[str, datetime | None]:
+    """`end` for markets still trading, None (= the market's own last row) for inactive ones.
+
+    Lighter publishes no delisting timestamp, so an inactive market's last settled hour is the
+    only exit date that exists. Measuring it against "now" would manufacture a coverage hole out
+    of a market that simply ended -- 173 (SPACEX) settled 985 complete hours and stopped."""
+    if meta is None:
+        return {}
+    return {row["symbol"]: (end if row["status"] == "active" else None)
+            for row in meta.iter_rows(named=True) if row["symbol"]}
 
 
 def _hl_listings(completeness: pl.DataFrame | None) -> dict[str, datetime]:
@@ -2213,15 +2347,20 @@ def main() -> int:
 
     end = last_complete_hour()
     arch = dataset.read_partition("hl_asset_ctxs_completeness", kind="daily")
+    meta = _lighter_metadata()
+    listings, tails = _lighter_listings(meta), _lighter_tail_anchors(meta, end)
     hl = _load("hl_funding", "coin")
     li = _load("lighter_funding", "market_id")
     candles = _load("lighter_candles", "market_id")
+    mark = _load("lighter_mark_candles", "market_id")
     hl_cov = coverage(hl, time_col="settle_time", expected_starts=_hl_listings(arch),
                       expected_end=end)
-    li_cov = coverage(li, time_col="settle_time", expected_starts=_lighter_listings(),
-                      expected_end=end)
-    candle_cov = coverage(candles, time_col="time", expected_starts=_lighter_listings(),
-                          expected_end=end)
+    li_cov = coverage(li, time_col="settle_time", expected_starts=listings,
+                      expected_ends=tails, expected_end=end)
+    candle_cov = coverage(candles, time_col="time", expected_starts=listings,
+                          expected_ends=tails, expected_end=end)
+    mark_cov = coverage(mark, time_col="time", expected_starts=listings,
+                        expected_ends=tails, expected_end=end)
     symbols = match_symbols(list(hl), list(li))
     xv = cross_venue(hl, li)
     lags = lag_scan(hl, li)
@@ -2232,7 +2371,8 @@ def main() -> int:
              f"{end} (the last complete hour).", ""]
     for name, cov, unit in (("Hyperliquid funding", hl_cov, "hours"),
                             ("Lighter funding", li_cov, "hours"),
-                            ("Lighter candles", candle_cov, "bars")):
+                            ("Lighter candles", candle_cov, "bars"),
+                            ("Lighter mark-price candles", mark_cov, "bars")):
         if cov.is_empty():
             lines += [f"## {name}", "", "**no data** — this dataset was not collected.", ""]
             continue
@@ -2248,6 +2388,23 @@ def main() -> int:
                   f"{int((cov['expected_start_source'] == 'listing').sum())} of {cov.height}", "",
                   "Worst ten by coverage (nulls last):", "",
                   _md_table(worst_by_coverage(cov)), ""]
+
+    if candle_cov.height and mark_cov.height:
+        gaps = (candle_cov.select("key", pl.col("first").alias("candle_first"))
+                .join(mark_cov.select("key", pl.col("first").alias("mark_first")),
+                      on="key", how="inner")
+                .with_columns((pl.col("mark_first") - pl.col("candle_first"))
+                              .dt.total_hours().alias("mark_starts_later_hours"))
+                .filter(pl.col("mark_starts_later_hours").abs() > 1)
+                .sort("mark_starts_later_hours", descending=True))
+        lines += ["## Mark-price candles vs trade candles: head gaps", "",
+                  "The two price series do not necessarily start together. Measured on market "
+                  "138 (AMD) while planning: trade candles from 2026-02-09 21:00Z, mark candles "
+                  "from 2026-02-18 05:00Z — eight days apart. Any market below starts its two "
+                  "series on different days, and a feature that joins them is silently short at "
+                  "the head unless it says so.", "",
+                  f"- markets whose series start more than an hour apart: {gaps.height}", "",
+                  _md_table(gaps.head(20)), ""]
 
     if arch is None or arch.is_empty():
         lines += ["## Hyperliquid per-minute state (`hl_asset_ctxs`)", "",
@@ -2323,7 +2480,7 @@ if __name__ == "__main__":
 - [ ] **Step 4: Run, expect pass**
 
 Run: `uv run pytest tests/test_qa_backfill.py -v`
-Expected: 10 passed.
+Expected: 11 passed.
 
 - [ ] **Step 5: Run it against the real backfill**
 
@@ -2374,7 +2531,7 @@ git commit -m "feat: backfill coverage, alignment, survivorship and vendor QA"
   - **per-market funding parameters**: the multiplier and base interest rate histograms from Task 2, and the explicit warning that a baseline test written against BTC's parameters is wrong on ~98 of 235 Lighter markets;
   - archive days with low completeness, the quarantine mechanism, and **2026-07-08, which has no file at all**;
   - the recorder-only hazard list: Lighter open interest, Lighter premium, **Lighter index price**, Lighter delisting timestamps, and an exact-to-settlement HL running funding series;
-  - **historical trades / aggregated flow are not collected** (Scope decision 1) — HL's node fills exist at ~$27/yr, Lighter has no usable historical counterpart, and Phase 8 must therefore decide H3's symmetric feature set before anyone builds an HL-only flow feature;
+  - **historical trades / aggregated flow are not collected** (Scope decision 1) — HL's node fills exist at ≈$34.4/yr (Tokyo egress; P3's $27.15 used the US rate), Lighter has no usable historical counterpart, and Phase 8 must therefore decide H3's symmetric feature set before anyone builds an HL-only flow feature;
   - Hyperliquid's settled funding starts **2023-05-12**, eight days before the archive, which is why the two datasets have different first days.
 
 - [ ] **Step 3: Update** `docs/phase2/dependency_map.md` — mark Phase 2b's rows as collected, with the dataset names; add the market-metadata row; leave the recorder-only rows as they are, and add Lighter index price to them.
@@ -2387,7 +2544,7 @@ git add docs/phase2/datasets.md docs/phase2/dependency_map.md
 git commit -m "docs: Phase 2b dataset documentation"
 ```
 
-Expected: **172 passed** — 116 before Phase 2b plus 56 new (17 dataset/retry, 7 markets and the Lighter client, 4 HL funding, 4 Lighter funding, 7 Lighter candles, 7 archive, 10 QA). If the number differs, reconcile it before committing rather than editing the expectation.
+Expected: **177 passed** — 118 before Phase 2b (the repo's 116 plus the two per-bucket egress tests Task 6 shipped) plus 59 new: 17 dataset/retry, 7 markets and the Lighter client, 4 HL funding, 4 Lighter funding, 7 Lighter candles, 9 archive, 11 QA. If the number differs, reconcile it before committing rather than editing the expectation.
 
 ---
 
@@ -2404,11 +2561,13 @@ exists **only** in `asset_ctxs` — Lighter has no native OI history at all, and
 2025-08-25 behind a $49/month tier. Declining Task 7 therefore removes the point-in-time universe
 *and* HL's historical price, premium, oracle and volume series, which are Phase 7's entire HL-side
 feature set. A reviewer costed the narrower alternative: a 2025-01-17→now subset (the date Lighter's
-oldest market lists, so the both-venue window) is ~6.8 GB and **~$0.78 at the corrected $0.114/GB**,
+oldest market lists, so the both-venue window) is ~6.8 GB and **~$0.61 at the archive's true $0.09/GB**,
 which would serve Target B's overlap window but **not Target A** (HL-only, back to 2023-05-12) and
 **not the point-in-time universe** (which needs the pre-overlap history to rank markets as of any
-date). The full pull at $1.15 is the correct call; the subset is the fallback if the budget is
-refused, and it must be recorded as a scope reduction, not a saving.
+date). The full pull at $0.92 is the correct call, and at the archive's true rate the subset saves
+only **$0.31** — a third of a dollar to give up Target A's first twenty months and the universe
+definition. The subset is the fallback if the budget is refused, and it must be recorded as a scope
+reduction, not a saving.
 
 With Task 7 done, Phase 3 (universe construction) is unblocked and needs nothing further from the
 recorder. Without it, Phase 3 is blocked on its defining input and this plan's completion claim does
