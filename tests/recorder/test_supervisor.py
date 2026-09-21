@@ -38,11 +38,16 @@ class HangingHL:
     def __init__(self):
         self.started = 0
         self.finished = 0
+        self.cancelled = 0
 
     async def meta_and_asset_ctxs(self):
         self.started += 1
-        await asyncio.sleep(3600)
-        self.finished += 1
+        try:
+            await asyncio.sleep(3600)
+            self.finished += 1
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            raise
 
     async def predicted_fundings(self):
         return []
@@ -107,6 +112,8 @@ async def test_a_hung_rest_feed_never_stops_the_websocket_feed(tmp_path):
     hl_rows = _rows(tmp_path, "hl_state")
     assert hl_client.started >= 2, "the poll must be retried, not left hanging forever"
     assert hl_client.finished == 0
+    assert hl_client.cancelled >= 2, \
+        "the watchdog must actually cancel the hung coroutine, not merely give up waiting on it"
     assert any(r.get("reason") == "watchdog_timeout" for r in hl_rows), \
         "the hung poll must be cancelled by its watchdog and recorded as a gap"
 

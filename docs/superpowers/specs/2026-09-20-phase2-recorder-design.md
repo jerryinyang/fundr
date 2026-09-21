@@ -53,7 +53,9 @@ to durable storage, with enough self-monitoring that a failure is visible rather
 
 One Python service, three independent tasks, sharing nothing that can block another. **All network
 I/O is async** (`httpx.AsyncClient`, `websockets`), each task with its own client and connection
-pool — see *Review corrections* #1.
+pool — see *Review corrections* #1. Carve-out: the S3 uploader (`upload.py`) runs synchronously
+as a separate systemd `oneshot` unit on a timer, not inside this service's event loop, so it
+cannot starve a feed task — the reason the async constraint exists does not apply to it.
 
 | Task | Source | Cadence | Writes |
 |---|---|---|---|

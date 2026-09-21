@@ -91,3 +91,26 @@ def test_no_bucket_configured_is_a_no_op(tmp_path):
     u = Uploader(Config(root=tmp_path, bucket=None), FakeS3())
     _part(tmp_path, "hl_state", "2026-09-20", "10")
     assert u.sync() == []
+
+
+def test_a_corrupt_manifest_does_not_wedge_the_upload_job(tmp_path):
+    """health.json is the only channel out and nothing alerts: a constructor that raises on
+    a corrupt manifest wedges every future upload run until someone fixes it by hand. An
+    empty manifest is safe — it only causes idempotent re-uploads and defers pruning."""
+    (tmp_path / "uploaded.json").write_text("{not valid json")
+    s3 = FakeS3()
+    u = Uploader(Config(root=tmp_path, bucket="b"), s3)
+    p = _part(tmp_path, "hl_state", "2026-09-20", "10")
+    assert u.sync() == [p]
+
+
+def test_manifest_is_written_atomically(tmp_path):
+    """Mirrors health.py's tmp-file + os.replace pattern: a crash mid-write must never leave
+    a truncated uploaded.json that a subsequent process fails to parse."""
+    s3 = FakeS3()
+    u = Uploader(Config(root=tmp_path, bucket="b"), s3)
+    _part(tmp_path, "hl_state", "2026-09-20", "10")
+    u.sync()
+    manifest_path = tmp_path / "uploaded.json"
+    assert not list(tmp_path.glob("*.tmp"))
+    assert json.loads(manifest_path.read_text())  # always fully parses, never truncated

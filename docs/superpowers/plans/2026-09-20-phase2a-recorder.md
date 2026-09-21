@@ -16,6 +16,7 @@
 - The recorder imports **no polars** — keep `fundr.sources` (which imports polars) out of `fundr.recorder`'s import path. Analysis and validation scripts may use polars.
 - **All network I/O is async** (`httpx.AsyncClient`, `websockets`). A synchronous client anywhere in a feed task is a defect: awaiting one blocks the event loop and every other task, which is Phase 1's exact failure.
 - **Every network call runs under `asyncio.wait_for`** with the configured watchdog timeout. A client-level timeout is not sufficient: a `timeout=30` client failed to bound an 84-minute read in Phase 1.
+- Carve-out: `src/fundr/recorder/upload.py` is intentionally synchronous. The "all I/O async" constraint exists so a slow call cannot starve a feed task sharing the recorder daemon's event loop; the uploader runs as its own systemd `oneshot` unit on a timer, sharing no event loop with the daemon, so a slow or hung upload blocks only itself.
 - **No feed's recording may depend on another feed's success.** Each task owns its timer, connection and writer.
 - Records are raw as received. No normalisation, signing, unit conversion or derived funding in the recorder.
 - Every record carries: `t_ms` (wall clock), `mono_ns` (monotonic), `feed`, `venue`, `seq` (monotonic per feed, including gap records), `run_id` (uuid4 minted once per process), `rec_ver`, `git_sha`. `seq` restarts at 1 on every process start, so gap detection across a restart is only possible by grouping on `run_id` first.

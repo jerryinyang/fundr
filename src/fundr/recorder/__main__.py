@@ -37,10 +37,13 @@ async def _run() -> None:
                      feeds={"hl_state": lambda: hl.run(stop),
                             "lighter_state": lambda: lighter.run(stop),
                             "universe": lambda: universe.run(stop)})
-    await sup.run(stop)
-    await hl_client.aclose()
-    await uni_hl_client.aclose()
-    await uni_lighter_client.aclose()
+    try:
+        await sup.run(stop)
+    finally:
+        # An unexpected raise out of sup.run() must not leak these HTTP clients.
+        await hl_client.aclose()
+        await uni_hl_client.aclose()
+        await uni_lighter_client.aclose()
 
 
 def main() -> None:
