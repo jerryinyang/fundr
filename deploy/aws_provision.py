@@ -238,7 +238,7 @@ def print_plan(p: Plan) -> None:
     print(f"al2023 arm64: {p.ami}  [{p.ami_source}]")
     print(f"ssh cidr:     {p.cidr}")
     print(f"tags:         {','.join(f'{k}={v}' for k, v in TAGS.items())}")
-    print(f"iam:          none -- no instance profile (account denies IAM; see the spec)")
+    print("iam:          none -- no instance profile (account denies IAM; see the spec)")
     print()
     print("exists:")
     for line in p.exists or ["  (nothing yet)"]:
@@ -257,7 +257,7 @@ def print_plan(p: Plan) -> None:
     print(f"monthly cost ({p.region}):")
     for label, amount in lines:
         print(f"  ${amount:5.2f}  {label}")
-    print(f"  ------")
+    print("  ------")
     print(f"  ${sum(a for _, a in lines):5.2f}  total per month")
 
 

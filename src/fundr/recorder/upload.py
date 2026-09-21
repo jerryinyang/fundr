@@ -1,11 +1,11 @@
 """Upload closed parts to S3 and prune local copies. Runs as its own systemd `oneshot` unit
-on a timer (`fundr-recorder-upload.timer`), never inside the recorder daemon's event loop —
+on a timer (`fundr-upload.timer`), never inside the recorder daemon's event loop —
 which is why this module is synchronous.
 
 Carve-out from the plan's "all I/O is async" / "every network call under asyncio.wait_for"
 constraint: that constraint exists so a slow call cannot starve a feed task sharing the same
 event loop. This process shares no event loop with the recorder — it is a separate systemd
-`oneshot` process invoked by `fundr-recorder-upload.timer` — so a slow or hung `upload_file`
+`oneshot` process invoked by `fundr-upload.timer` — so a slow or hung `upload_file`
 call blocks only itself, never a feed. The constraint's purpose is preserved; only its literal
 scope (limited to the recorder daemon's own event loop) is spelled out here."""
 import json
@@ -14,7 +14,7 @@ import os
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fundr.recorder.config import Config
+from fundr.recorder.config import Config, INSTANCE_ID
 
 KEY_PREFIX = "recorder/v1"
 MANIFEST_NAME = "uploaded.json"
@@ -52,7 +52,17 @@ class Uploader:
         return self._s3
 
     def key_for(self, path: Path) -> str:
-        return f"{KEY_PREFIX}/{path.relative_to(self._cfg.root).as_posix()}"
+        rel = path.relative_to(self._cfg.root).as_posix()
+        if rel == HEALTH_NAME:
+            # Every *.jsonl.gz part's FILENAME already embeds INSTANCE_ID
+            # (HourlyWriter.path_for), so those keys never collide across recorders sharing a
+            # bucket. health.json has no such filename -- without this, two recorders would
+            # silently overwrite each other's health file at the same key, violating the
+            # spec's own anti-collision rule (docs/phase2/recorder_runbook.md and
+            # deploy/README.md both document the intended key as
+            # recorder/v1/<instance-id>/health.json).
+            return f"{KEY_PREFIX}/{INSTANCE_ID}/{HEALTH_NAME}"
+        return f"{KEY_PREFIX}/{rel}"
 
     def pending(self) -> list[Path]:
         """Everything whose size differs from the manifest, INCLUDING the current hour's

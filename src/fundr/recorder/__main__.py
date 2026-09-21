@@ -34,8 +34,12 @@ async def _run() -> None:
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGTERM, signal.SIGINT):
         loop.add_signal_handler(sig, stop.set)
-    # The universe sweep runs first so the Lighter feed knows what to subscribe to.
-    await universe.cycle()
+    # The universe sweep runs first so the Lighter feed knows what to subscribe to. Uses
+    # `bootstrap()`, not `cycle()`, directly: this call happens before `Supervisor` exists, so a
+    # raw `cycle()` raise here would crash the whole process before any feed starts, and
+    # systemd's restart would repeat the same crash forever with nothing recorded by either
+    # feed. `bootstrap()` catches that, logs it, and proceeds with an empty universe instead.
+    await universe.bootstrap()
     sup = Supervisor(cfg, clock, writers=writers, health=health,
                      feeds={"hl_state": lambda: hl.run(stop),
                             "lighter_state": lambda: lighter.run(stop),

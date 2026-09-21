@@ -182,7 +182,9 @@ From [P9](../../phase1/evidence/P9-live-probe.md), all produced by Phase 1's own
 **`status` thresholds** (so the field is testable): `ok` = every active market ≥ 95% of expected
 snapshots in the last hour, no open gap older than 5 minutes, both feeds reconnected < 5 times in
 the hour. `degraded` = any market between 50% and 95%, or an open gap under 30 minutes.
-`broken` = any feed below 50%, an open gap over 30 minutes, or no write in 5 minutes.
+`broken` = any feed below 50%, an open gap over 30 minutes, or no write in 5 minutes *(per feed,
+scaled by that feed's own cadence — see
+[Review corrections, sixth round](#review-corrections-sixth-round))*.
 
 **"In the last hour" means a trailing 60-minute window, prorated.** Read as the *calendar* hour it
 is unimplementable: a feed expecting 60 snapshots an hour scores 1/60 = 1.7% one minute past
@@ -219,7 +221,13 @@ dies without taking the others down.
   every cycle too — skipping the open hour would put up to ~70 minutes of data at risk on instance
   loss, and `health.json` is the only thing the no-alerting decision leaves visible from outside.
   Local files deleted after 7 days once confirmed in S3.
-- **Cost, stated honestly: ~$8–10/month.** Instance ~$6.13, public IPv4 ~$3.60/month (charged since
+- **Cost, stated honestly: ~$8–10/month** as originally scoped for `us-east-1` with an instance
+  role. *(Superseded by what actually shipped: ~$11.23/month in `eu-central-1` with no instance
+  role — Frankfurt's `t4g.micro` and gp3 rates are both higher, and the region move itself was
+  necessary because Lighter geo-blocks `us-east-1`. See
+  [Review corrections, fourth round](#review-corrections-fourth-round) for the exact breakdown;
+  this original estimate is left here only as the pre-deployment baseline it was.)* Instance
+  ~$6.13, public IPv4 ~$3.60/month (charged since
   2024, and required unless one pays ~$30/month for VPC interface endpoints — so Session Manager is
   not free either way), disk ~$0.64, S3 and requests under $1. **Volume ~1M+ rows/day, ~40–50 MB
   compressed** (the earlier ~700k was too low: Hyperliquid alone is 234 markets × 1440 polls =
@@ -473,3 +481,43 @@ instance or a new commit gets code onto the box.
 narrowly-scoped deploy token at boot rather than a static key file) becomes available, set
 `FUNDR_REPO` and `bootstrap.sh` will clone/checkout instead of expecting an out-of-band rsync,
 matching the brief's original design without further code changes.
+
+## Review corrections, sixth round
+
+A branch-wide review of the shipped code against this spec found two places where `health.py`
+did not match the wording above. One is a deliberate, permanent deviation being recorded here for
+the first time; the other was an implementation bug that has now been fixed in code rather than
+in the spec, because the spec's behaviour is the one the seven-day gate actually needs.
+
+**1. Deviation (permanent): the "no write in 5 minutes" `broken` threshold is per-feed, scaled by
+cadence, not a flat 5 minutes.** `Health.set_cadence` / `_stale_threshold_ms` (`health.py:45-58`)
+compute each feed's own stale threshold as `max(5 minutes, 3 × that feed's cadence)`. For
+`hl_state` and `lighter_state` (cadences of a few seconds to a minute) this is indistinguishable
+from the spec's flat 5 minutes. For `universe`, which is designed to write once every 300 seconds
+(5 minutes) by cadence, a literal flat 5-minute threshold would read `broken` between every single
+sweep, by construction — the exact bug the window-proration section above already fixed for
+coverage, applied here to staleness instead. The per-feed threshold (900 seconds for `universe`,
+three missed cycles rather than zero margin against one) is the correct fix, and the wording above
+now says so. **Cost of the deviation:** a genuinely dead `universe` feed takes up to 15 minutes to
+read `broken` instead of 5 — an acceptable trade against three-hourly false positives on a feed
+that is not remotely time-critical.
+
+**2. Bug, now fixed in code (not a deviation): `status()` degraded on ANY open gap, regardless of
+age.** The spec says `ok` tolerates an open gap under 5 minutes old and `degraded` covers 5–30
+minutes; the shipped `status()` instead treated the mere *presence* of an open gap — even one that
+had been open for a fraction of a second — as enough to read `degraded`. Because `health.json` is
+rewritten once a minute on its own timer (independent of when a gap opens or closes), a single bad
+poll cycle whose gap happened to still be open at the instant of that minute's health write could
+read `degraded` for that whole interval, purely on timing, for a blip the spec explicitly classes
+as `ok`. Over seven consecutive days this is not a hypothetical: it is exactly the kind of one-off,
+self-healing hiccup (one dropped HL poll, one Lighter reconnect) the coverage-not-counts design
+elsewhere in this document exists to *not* punish, and it could cost an entire day of the
+seven-day gate for something the recorder itself considered routine and already recovered from
+before the next health write.
+
+**Fixed in code, not in the spec**, because the spec's threshold is the one the gate needs:
+`health.py` gained `OK_GAP_MS = 5 * 60_000`, and `status()`'s `degraded` condition now reads
+`any(g > OK_GAP_MS for g in gaps)` instead of the bare truthiness of `gaps`. `broken`'s check
+(`any(g > DEGRADED_GAP_MS for g in gaps)`, 30 minutes) was already correct and unchanged. A
+regression test (`tests/recorder/test_health.py::test_a_gap_under_five_minutes_old_is_still_ok`)
+pins both ends: a 30-second-old gap reads `ok`, a 5-minute-and-one-second-old gap reads `degraded`.

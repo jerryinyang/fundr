@@ -167,3 +167,39 @@ async def test_total_failure_returns_empty_list_and_writes_three_gaps(tmp_path):
     assert ids == []
     assert {g["reason"] for g in gaps} == {"hl_meta_error", "lighter_books_error",
                                             "lighter_details_error"}
+
+
+class MalformedHL:
+    """A response that HAS arrived (so `_fetch`'s try/except never fires) but no longer has the
+    shape `cycle()` assumes -- the scenario `_fetch`'s own guard cannot catch, because the
+    failure is not in awaiting the coroutine, it is in what the coroutine returned."""
+    async def meta(self):
+        return {"NOT_universe_anymore": []}
+
+
+async def test_bootstrap_survives_a_malformed_response_and_returns_empty_universe(tmp_path):
+    """This is the bug the reviewer found: `cycle()` indexes `hl_meta["universe"]` with no
+    guard once `_fetch` has returned a non-None response, so a venue that changes its response
+    shape raises a bare KeyError. `cycle()` itself is meant to be run under supervision (which
+    restarts on any exception) -- but `bootstrap()` is the one call site that runs BEFORE the
+    supervisor exists. It must swallow the same failure, not propagate it."""
+    feed, w = _feed(tmp_path, hl=MalformedHL())
+    ids = await feed.bootstrap()
+    w.close()
+    assert ids == []
+    rows = _rows(tmp_path)
+    gaps = [r for r in rows if r.get("type") == "gap"]
+    assert any(g["reason"].startswith("bootstrap_error:KeyError") for g in gaps)
+
+
+async def test_bootstrap_passes_through_a_normal_sweep_unchanged(tmp_path):
+    """`bootstrap()` must not change behaviour on the happy path -- it is a supervision wrapper
+    around `cycle()`, not a different sweep."""
+    seen = []
+    feed, w = _feed(tmp_path, on_markets=seen.append)
+    ids = await feed.bootstrap()
+    w.close()
+    assert ids == [1]
+    assert seen == [[1]]
+    rows = _rows(tmp_path)
+    assert not any(r.get("type") == "gap" for r in rows)

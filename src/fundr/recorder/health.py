@@ -22,6 +22,15 @@ WINDOW_MS = 3_600_000          # the trailing window the spec's "in the last hou
 OK_COVERAGE = 0.95
 BROKEN_COVERAGE = 0.50
 OK_MAX_RECONNECTS = 5
+# Spec thresholds (docs/superpowers/specs/2026-09-20-phase2-recorder-design.md, "status
+# thresholds"): ok tolerates an open gap under 5 minutes old; degraded is 5-30 minutes;
+# broken is over 30 minutes OR no write in the feed's stale window. Sixth-round deviation:
+# `status()` used to degrade on ANY open gap regardless of age, so a gap that opened and
+# closed within seconds -- one bad HL poll cycle, say -- could still read `degraded` for a
+# whole health-write interval if the write landed inside that window, silently costing a day
+# of the seven-consecutive-days-at-ok gate for a blip the design explicitly calls "ok". See
+# the spec's sixth review-correction round.
+OK_GAP_MS = 5 * 60_000
 DEGRADED_GAP_MS = 30 * 60_000
 STALE_WRITE_MS = 5 * 60_000
 # Below one prorated expected event the ratio is dominated by rounding: a market listed
@@ -149,7 +158,7 @@ class Health:
         if (coverages and min(coverages) < BROKEN_COVERAGE) or \
            any(g > DEGRADED_GAP_MS for g in gaps) or any(stale):
             return "broken"
-        if (coverages and min(coverages) < OK_COVERAGE) or gaps or \
+        if (coverages and min(coverages) < OK_COVERAGE) or any(g > OK_GAP_MS for g in gaps) or \
            any(len(dq) >= OK_MAX_RECONNECTS for dq in self._reconnects.values()):
             return "degraded"
         return "ok"

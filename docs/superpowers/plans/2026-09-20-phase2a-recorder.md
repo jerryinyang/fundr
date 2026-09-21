@@ -2615,6 +2615,15 @@ git commit -m "feat: deploy units, bootstrap script and local soak harness"
 
 ### Task 10: Publish the repo, provision AWS, deploy
 
+**What actually shipped deviates from every AWS/deploy detail below** — no IAM (so no instance
+profile, no Session Manager, SSH from one /32 instead), `us-east-1` moved to `eu-central-1`
+(Lighter geo-blocks the US), and `deploy/user_data.sh`'s git-clone-with-deploy-key replaced by an
+rsync of the working tree (no git credential on the instance). This plan text describes the
+original design, not the deployed state; the deployed state, why it differs, and the exact
+condition for reverting each deviation are all in
+`docs/superpowers/specs/2026-09-20-phase2-recorder-design.md`, "Review corrections, third round"
+onward. Read that before touching AWS from this task's instructions.
+
 Every step here spends the user's money or touches their account. **Present each action and its
 cost, and get an explicit yes, before running it** — that is the standing rule for this task, from
 the spec's decision table, and it applies to the GitHub steps as well as the AWS ones. Use `boto3`

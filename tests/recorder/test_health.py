@@ -81,6 +81,21 @@ def test_long_open_gap_is_broken_and_short_one_degraded():
     assert h.status(now) == "broken"
 
 
+def test_a_gap_under_five_minutes_old_is_still_ok():
+    """Sixth-round spec deviation fix: `status()` used to degrade on ANY open gap regardless of
+    age, so a gap that opens and closes within seconds -- one bad poll cycle -- could still read
+    `degraded` for a whole health-write interval, costing a day of the seven-day gate for a blip
+    the spec explicitly calls `ok` ("no open gap older than 5 minutes")."""
+    h, state = _health()
+    _minutely(h, state, "hl_state", {"BTC": 60}, 60)
+    state["wall"] += 1_000
+    now = state["wall"]
+    h.gap_open("hl_state", now - 30_000)   # 30s old: well under the 5-minute "ok" tolerance
+    assert h.status(now) == "ok"
+    h.gap_open("hl_state", now - 5 * MIN - 1_000)   # just over 5 minutes: no longer ok
+    assert h.status(now) == "degraded"
+
+
 def test_no_write_for_five_minutes_is_broken():
     h, state = _health()
     _minutely(h, state, "hl_state", {"BTC": 30}, 30)

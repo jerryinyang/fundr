@@ -28,7 +28,8 @@ class FakeHL:
 
 
 def _rows(path_root, feed="hl_state"):
-    import gzip, json
+    import gzip
+    import json
     out = []
     for p in sorted((path_root / feed).rglob("*.jsonl.gz")):
         out += [json.loads(x) for x in gzip.open(p, "rt").read().splitlines()]

@@ -84,6 +84,32 @@ class UniverseFeed:
                 self._on_markets(active)
         return active
 
+    async def bootstrap(self) -> list[int]:
+        """One sweep run BEFORE the supervisor exists, so the Lighter feed knows what to
+        subscribe to from the first cycle. `Supervisor.supervise` catches and restarts on any
+        exception from a supervised feed, but this call happens outside that protection: if
+        either venue changes its response shape (`hl_meta["universe"]`, `b["market_id"]` above
+        are unguarded once `_fetch` has returned a non-None response), `cycle()` raises,
+        `__main__._run()` raises before `Supervisor` is even constructed, the process exits, and
+        systemd restarts it into the exact same crash 10 seconds later -- forever, with BOTH
+        feeds recording nothing the whole time, the requirement-1 failure mode reintroduced at
+        the one call site no test reaches. Catch everything `cycle()` can raise, log it, write a
+        gap record (this feed's own writer/seq, so it lands in the same partition as every other
+        gap), and return an empty universe: the Lighter feed simply starts with no subscriptions,
+        and the first PERIODIC sweep -- which DOES run under supervision -- populates it as soon
+        as the underlying issue clears."""
+        t_ms, mono_ns = self._clock.now_ms(), self._clock.mono_ns()
+        try:
+            return await self.cycle()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            print(f"universe bootstrap sweep failed, proceeding with an empty universe: {e!r}")
+            self._w.write(records.gap(FEED, "both", self._seq.next(), t_ms=t_ms, mono_ns=mono_ns,
+                                      from_ms=t_ms, to_ms=self._clock.now_ms(),
+                                      reason=f"bootstrap_error:{type(e).__name__}"))
+            return []
+
     async def run(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             started = self._clock.mono_ns()

@@ -506,10 +506,14 @@ formula case files.
 
 ## 8. Recommended next actions, in order
 
-1. **Back up `data/phase1/p09/live.jsonl` off this machine** (cloud storage or a second disk).
-   It is the only Lighter premium history in existence, it is gitignored, and Lighter's formula
-   confirmation depends on it. The existing `_backup/` copy is on the same disk, so it does not
-   discharge this. Cost: minutes. ([`data_audit.md` §6](data_audit.md#6-known-gaps))
+1. ~~**Back up `data/phase1/p09/live.jsonl` off this machine** (cloud storage or a second disk).~~
+   **Done.** It is in S3 at
+   `s3://fundr-recorder-801242831140-us-east-1/phase1/p09/live_2026-09-19.jsonl`, 5,557,972 bytes,
+   verified against the local copy. It is the only Lighter premium history in existence and
+   Lighter's formula confirmation depends on it; the pre-existing `_backup/` copy was on the same
+   disk and did not discharge this on its own. See the recorder runbook's "Prior art in the
+   bucket" (`docs/phase2/recorder_runbook.md`) for the operational note: do not delete it.
+   ([`data_audit.md` §6](data_audit.md#6-known-gaps))
 2. **Build the always-on recorder and start it** (§4) — before any backfill, before any modelling.
    Every day it is not running is a day of Target C that cannot be recovered. Build it fresh
    against the five requirements rather than adapting `probes/p09_live.py`, and give it the full

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from fundr.recorder.config import Config
+from fundr.recorder.config import Config, INSTANCE_ID
 from fundr.recorder.upload import Uploader
 
 
@@ -68,9 +68,18 @@ def test_health_json_is_uploaded_every_sync(tmp_path):
     health = tmp_path / "health.json"
     health.write_text('{"status": "ok"}')
     assert health in u.sync()
-    assert ("b", "recorder/v1/health.json") in s3.put
+    # Must carry the instance id: unlike *.jsonl.gz parts (whose FILENAME already embeds it),
+    # health.json's filename does not, so two recorders sharing a bucket would otherwise
+    # overwrite each other's health file at the same key.
+    assert ("b", f"recorder/v1/{INSTANCE_ID}/health.json") in s3.put
     health.write_text('{"status": "degraded", "n": 1}')
     assert health in u.sync()
+
+
+def test_health_json_key_is_scoped_by_instance_id(tmp_path):
+    u = Uploader(Config(root=tmp_path, bucket="b"))
+    key = u.key_for(tmp_path / "health.json")
+    assert key == f"recorder/v1/{INSTANCE_ID}/health.json"
 
 
 def test_prune_only_deletes_old_confirmed_parts(tmp_path):

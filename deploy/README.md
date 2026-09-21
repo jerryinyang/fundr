@@ -76,12 +76,16 @@ systemctl list-timers fundr-upload.timer
 
 ## Where data lands
 
-- **Locally**: `/var/lib/fundr/<feed>/<YYYY>/<MM>/<DD>/<HH>.jsonl.gz` (one gzip-compressed
-  JSONL part per feed per hour), plus `/var/lib/fundr/health.json` (health snapshot, rewritten
-  atomically on every supervisor tick) and `/var/lib/fundr/uploaded.json` (upload manifest).
-  Local parts are pruned after `local_retention_days` (default 7) once confirmed uploaded.
+- **Locally**: `/var/lib/fundr/<feed>/date=<YYYY-MM-DD>/hour=<HH>/<feed>-<instance-id>-<YYYYMMDD>T<HH>.jsonl.gz`
+  (one gzip-compressed JSONL part per feed per hour, filename carrying the instance id so two
+  recorders sharing a bucket never collide on a part — see `HourlyWriter.path_for`), plus
+  `/var/lib/fundr/health.json` (health snapshot, rewritten atomically on every supervisor tick)
+  and `/var/lib/fundr/uploaded.json` (upload manifest). Local parts are pruned after
+  `local_retention_days` (default 7) once confirmed uploaded.
 - **In S3**: under `s3://<FUNDR_BUCKET>/recorder/v1/...`, mirroring the same per-feed/per-hour
-  key layout, plus `recorder/v1/<instance-id>/health.json` alongside the data.
+  key layout, plus `recorder/v1/<instance-id>/health.json` alongside the data — health.json's
+  key is scoped by instance id explicitly (`Uploader.key_for`) since, unlike a part's filename,
+  `health.json`'s name carries no instance id on its own.
 
 ## Reading `health.json` from S3
 

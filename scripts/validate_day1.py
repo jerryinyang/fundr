@@ -253,11 +253,14 @@ def main(argv: list[str] | None = None) -> int:
     args = ap.parse_args(argv)
     root = Path(args.root)
 
-    lighter_stats, lighter_verdict = validate_lighter(root)
-    hl_stats, hl_verdict = validate_hl(root)
-    print("LIGHTER", lighter_verdict)
-    print("HL", hl_verdict)
-    return 0 if (lighter_verdict == "PASS" and hl_verdict == "PASS") else 1
+    # Named _str to avoid shadowing the module-level lighter_verdict()/hl_verdict() functions
+    # above, which compute these same strings from raw match_stats -- a local of the same name
+    # reads as though it might BE that function, not its result.
+    lighter_stats, lighter_verdict_str = validate_lighter(root)
+    hl_stats, hl_verdict_str = validate_hl(root)
+    print("LIGHTER", lighter_verdict_str)
+    print("HL", hl_verdict_str)
+    return 0 if (lighter_verdict_str == "PASS" and hl_verdict_str == "PASS") else 1
 
 
 if __name__ == "__main__":

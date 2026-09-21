@@ -235,11 +235,14 @@ rsync -az --delete -e "ssh -i $KEY" --rsync-path="sudo rsync" \
 
 ssh -i $KEY ec2-user@$IP \
   "sudo env FUNDR_BUCKET= FUNDR_GIT_SHA=$SHA bash /opt/fundr/deploy/bootstrap.sh"
-
-# the bootstrap does NOT restart an already-running service (`enable --now` is a no-op on one),
-# so the new FUNDR_GIT_SHA only reaches the records after an explicit restart:
-ssh -i $KEY ec2-user@$IP "sudo systemctl restart fundr-recorder"
 ```
+
+`bootstrap.sh` ends with an explicit `systemctl restart fundr-recorder.service` (and
+`fundr-upload.timer`) — no separate manual restart is needed. This was not always true:
+`enable --now` is a no-op on an already-running unit, so an earlier version of this script would
+rewrite `/etc/fundr/recorder.env` with the new `FUNDR_GIT_SHA` while the still-running process kept
+stamping the *old* sha into every record's provenance. Fixed in code (`bootstrap.sh`, sixth review
+round); one rsync + one bootstrap run is now sufficient to redeploy.
 
 > **`--exclude '.local'` is load-bearing — do not drop it.** `uv` installs its *managed Python
 > interpreter* under `/opt/fundr/.local/share/uv/python/`, and the deploying worktree has no
