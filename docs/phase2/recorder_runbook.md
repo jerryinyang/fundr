@@ -91,6 +91,32 @@ boto3.client('ec2', region_name='us-east-1').revoke_security_group_ingress(
                     'IpRanges':[{'CidrIp':'OLD.IP.HERE/32'}]}])"
 ```
 
+## Known blocker: Lighter geo-blocks `us-east-1`
+
+**`health.json` reads `broken`, and this is why.** Lighter's edge refuses the websocket handshake
+from the instance's US IP:
+
+```
+HTTP/1.1 400 Bad Request     (Server: CloudFront)
+{"code": 20558, "message": "You are accessing Lighter from a restricted jurisdiction..."}
+```
+
+The same handshake succeeds from the operator's laptop, so the block is by client IP jurisdiction,
+not a bug. Consequences:
+
+- `hl_state` records normally (coverage 1.0 across ~178 markets) and `universe` records normally —
+  Lighter's **REST** API is not blocked, so `funding_premium_multiplier` and the other Lighter
+  funding parameters are still being captured.
+- `lighter_state` records nothing but gap/reconnect entries: coverage 0.0, an open gap, and a
+  steady reconnect count. That is the recorder behaving correctly — it retries, it logs the gap,
+  it does not crash, and it does not take the other feeds down.
+- Overall `status` is therefore `broken` and will stay `broken` until this is resolved.
+
+Resolving it means running the recorder from a non-restricted jurisdiction, which is a
+terms-of-service decision, not an engineering one. `deploy/aws_provision.py` reads `AWS_REGION`,
+so re-provisioning elsewhere is one `apply` plus one redeploy at the same cost — but make the
+decision first.
+
 ## Read health
 
 ```bash
