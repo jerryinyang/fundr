@@ -46,7 +46,12 @@ runs `uv sync --no-dev`, installs the three unit files, verifies them with
 idempotent — safe to re-run against an already-provisioned box (e.g. to redeploy a new SHA).
 
 Configuration arrives via the **environment**, not positional arguments (user-data invokes
-the script with no argv): `FUNDR_BUCKET`, `FUNDR_GIT_SHA`, `FUNDR_REPO` are required;
+the script with no argv): `FUNDR_BUCKET` and `FUNDR_GIT_SHA` are required, though `FUNDR_BUCKET`
+may legitimately be **empty** (no S3 credential → the uploader no-ops). `FUNDR_REPO` is
+**optional**: set it to have the script clone and check out the code; leave it unset when the
+working tree has already been delivered to `/opt/fundr` out of band, which is what the current
+deployment does (`rsync` over SSH — see `docs/phase2/recorder_runbook.md`), because cloning a
+private repo from the instance would require putting a git credential on the instance.
 `FUNDR_INSTANCE_ID` is optional and defaults to the EC2 instance id read from IMDSv2.
 
 Note: `sudo -u fundr -H` is required, not just `-u fundr` — without `-H`, `HOME` stays `/root`
@@ -55,8 +60,9 @@ cannot read, which fails on AL2023. `UV_CACHE_DIR=/opt/fundr/.cache` pins the ca
 directory the service account owns.
 
 `FUNDR_REPO` is the git URL for the private repository holding this code (SSH form, with a
-read-only deploy key at `/etc/fundr/deploy_key`, when the repo is private). Task 10 creates
-that repository and supplies the actual URL and deploy key via instance user-data.
+read-only deploy key at `/etc/fundr/deploy_key`, when the repo is private). The deployed
+instance does **not** use it: it holds no git credential at all, and the tree is pushed to it by
+`rsync`. `docs/phase2/recorder_runbook.md` has the exact redeploy command.
 
 ## Checking status
 

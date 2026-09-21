@@ -1,8 +1,8 @@
 # Phase 2a — The Always-On Funding Recorder: Design
 
 Date: 2026-09-20 (revised the same day after an independent review; revised again 2026-09-21 after
-a final review of the implementation plan — see *Review corrections* and *Review corrections,
-second round*)
+a final review of the implementation plan, and amended again after deployment — see *Review
+corrections*, *Review corrections, second round* and *Review corrections, third round*)
 Parent: `docs/funding_research_design.md` (Phase 2)
 Predecessor: `docs/phase1/handoff.md` (§4 "The recorder Phase 2 must build")
 
@@ -202,8 +202,11 @@ dies without taking the others down.
 - `t4g.micro` (1 GB), 8 GB gp3, `us-east-1`. 512 MB was rejected: ~246 Lighter markets at roughly
   190 messages/second plus gzip leaves too little headroom. Region is the cheap one; the earlier
   "close to the venues" rationale was an untested inference and irrelevant at a 60-second cadence.
-- **No inbound ports.** Shell via AWS Session Manager.
-- Instance role scoped to the one S3 bucket; no access keys on the instance.
+- **No inbound ports.** Shell via AWS Session Manager. *(Not what was deployed — the account
+  denies all IAM, so there is no instance role and therefore no Session Manager. See
+  [Review corrections, third round](#review-corrections-third-round).)*
+- Instance role scoped to the one S3 bucket; no access keys on the instance. *(Also not deployed,
+  same reason: the instance has no profile, and the recorder writes to local EBS only.)*
 - One private, versioned bucket, with **both** a current-version transition (90 days → cheaper
   storage) and a **noncurrent-version expiry (7 days)** — without the second rule, versioning plus
   frequent uploads accumulates noncurrent copies indefinitely.
@@ -344,3 +347,50 @@ found defects that reach back into this document. Recorded here so the reasoning
 13. **The repository had no remote**, so `bootstrap.sh`'s clone could never have run. Now: a
     private GitHub repo with a read-only deploy key, and configuration passed to the bootstrap
     through the user-data environment rather than positional arguments user-data cannot supply.
+
+## Review corrections, third round
+
+Deploying (Task 10) hit a constraint no amount of design could have anticipated: **the AWS
+account denies every IAM action**. `iam:CreateRole` and `iam:ListInstanceProfiles` both return
+`AccessDenied` for the available credentials; S3 and EC2 work normally. Two of this document's
+AWS-footprint assumptions therefore could not be honoured, and the deployment deliberately
+deviates from them. Recorded here so the deviation is visible and reversible:
+
+1. **No instance profile, so no Session Manager, so SSH.** Session Manager requires the instance
+   to assume a role carrying `AmazonSSMManagedInstanceCore`. With IAM denied, that role cannot be
+   created, and an instance with no profile can never register with SSM. The deployment instead
+   uses an EC2 key pair and a security group whose only inbound rule is **TCP 22 from the
+   operator's current public IP as a /32**, with key-only authentication (Amazon Linux 2023 ships
+   `PasswordAuthentication no`). **Cost of the deviation:** port 22 is reachable from one address
+   instead of from nowhere, and the private key at `auth/fundr-recorder.pem` (gitignored, mode
+   0600) becomes a credential that can reach the box. The operator's IP changes; the security
+   group rule must then be updated, which is a routine documented in the runbook.
+2. **No instance role, so no S3 uploads: the recorder records to local disk only.** The uploader
+   reads `FUNDR_BUCKET`; it is left **empty** in `/etc/fundr/recorder.env`, so every timer firing
+   is a no-op and nothing is written to the bucket. **Cost of the deviation:** the "instance loss
+   bounded to minutes" property is gone — the only copy of the recording lives on the instance's
+   8 GB gp3 volume. That volume persists across reboots and stop/starts, and at ~30 MB/day
+   (measured in the local soak, compressed) 8 GB is months of headroom, but an instance
+   *termination* or a volume failure loses the data. `health.json` is likewise readable only over
+   SSH, not from S3, so the Done-when clause "readable from S3 without logging into the instance"
+   is **not satisfied** until the role exists. The bucket itself is already provisioned correctly
+   (private, versioned, both lifecycle rules) and already holds the irreplaceable Phase 1
+   recording at `phase1/p09/live_2026-09-19.jsonl`.
+
+**Exact condition for reverting both deviations.** When the account grants IAM (or an
+administrator does this on the user's behalf):
+
+1. Create role `fundr-recorder-role` trusted by `ec2.amazonaws.com`, with an inline policy
+   allowing `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` and `s3:HeadObject` on
+   `arn:aws:s3:::fundr-recorder-801242831140-us-east-1` and `.../*` **only**, plus the managed
+   policy `arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore`.
+2. Create the matching instance profile and associate it with the running instance
+   (`ec2:AssociateIamInstanceProfile` — no restart or redeploy needed).
+3. Set `FUNDR_BUCKET=fundr-recorder-801242831140-us-east-1` in `/etc/fundr/recorder.env` and
+   `systemctl restart fundr-upload.timer`; the next firing backfills everything still on disk,
+   because the upload manifest is idempotent and pruning is confirmed-only.
+4. Revoke the inbound TCP 22 rule from `fundr-recorder-sg` once a Session Manager shell is
+   confirmed working, and delete the local private key.
+
+Until step 4 lands, the spec's "no inbound ports" line and its instance-role line describe the
+intended end state, not the deployed one.

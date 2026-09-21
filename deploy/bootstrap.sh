@@ -2,16 +2,22 @@
 # Provision a clean Amazon Linux 2023 arm64 instance to run the recorder.
 # Run as root on the instance. Idempotent.
 #
-# Configuration comes from the environment (user-data exports it), NOT from positional args:
-#   FUNDR_BUCKET   required, the S3 bucket
-#   FUNDR_GIT_SHA  required, the commit to deploy
-#   FUNDR_REPO     required, git URL (ssh form when using a deploy key)
+# Configuration comes from the environment (user-data or the deploying ssh command exports it),
+# NOT from positional args:
+#   FUNDR_BUCKET   required, may be EMPTY -- an empty bucket makes the uploader a no-op
+#   FUNDR_GIT_SHA  required, the commit deployed (stamped into every record's provenance)
+#   FUNDR_REPO     optional, git URL. Set it to have this script clone/checkout the code.
+#                  Leave it unset when the working tree has already been delivered to
+#                  /opt/fundr out of band (rsync over ssh) -- which is what Task 10 does,
+#                  because a clone from the private repo would require a deploy key ON the
+#                  instance, and no secret belongs there.
 #   FUNDR_INSTANCE_ID  optional, defaults to the EC2 instance id
 set -euo pipefail
 
-: "${FUNDR_BUCKET:?FUNDR_BUCKET must be set in the environment}"
+# Note the '+' (set, possibly empty) rather than ':?' (set and non-empty): FUNDR_BUCKET is
+# legitimately empty when there is no S3 credential on the instance.
+: "${FUNDR_BUCKET?FUNDR_BUCKET must be set in the environment (may be empty)}"
 : "${FUNDR_GIT_SHA:?FUNDR_GIT_SHA must be set in the environment}"
-: "${FUNDR_REPO:?FUNDR_REPO must be set in the environment}"
 
 TOKEN="$(curl -sX PUT http://169.254.169.254/latest/api/token \
   -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')"
@@ -24,6 +30,8 @@ systemctl enable --now chronyd            # requirement 4: trustworthy wall cloc
 
 id fundr &>/dev/null || useradd --system --home /opt/fundr --shell /usr/sbin/nologin fundr
 install -d -o fundr -g fundr /opt/fundr /var/lib/fundr /etc/fundr /opt/fundr/.cache
+# The tree may have arrived by rsync as root; uv and the service both run as fundr.
+chown -R fundr:fundr /opt/fundr
 
 curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
 
@@ -49,10 +57,20 @@ run_as_fundr() {
   sudo -u fundr -H -E env "UV_CACHE_DIR=/opt/fundr/.cache" "GIT_SSH_COMMAND=${GIT_SSH_COMMAND:-ssh}" "$@"
 }
 
-run_as_fundr git -C /opt/fundr rev-parse --git-dir &>/dev/null || \
-  run_as_fundr git clone "${FUNDR_REPO}" /opt/fundr
-run_as_fundr git -C /opt/fundr fetch --all
-run_as_fundr git -C /opt/fundr checkout "${FUNDR_GIT_SHA}"
+if [[ -n "${FUNDR_REPO:-}" ]]; then
+  run_as_fundr git -C /opt/fundr rev-parse --git-dir &>/dev/null || \
+    run_as_fundr git clone "${FUNDR_REPO}" /opt/fundr
+  run_as_fundr git -C /opt/fundr fetch --all
+  run_as_fundr git -C /opt/fundr checkout "${FUNDR_GIT_SHA}"
+else
+  # Code delivered out of band (rsync). Fail loudly rather than start a recorder from an
+  # empty directory, which would look like a boot loop instead of a deploy mistake.
+  [[ -f /opt/fundr/pyproject.toml ]] || {
+    echo "FUNDR_REPO unset and /opt/fundr holds no working tree -- nothing to deploy" >&2
+    exit 1
+  }
+  echo "using the working tree already present in /opt/fundr (FUNDR_GIT_SHA=${FUNDR_GIT_SHA})"
+fi
 run_as_fundr /usr/local/bin/uv --directory /opt/fundr sync --no-dev
 
 install -m 644 /opt/fundr/deploy/fundr-recorder.service /etc/systemd/system/
