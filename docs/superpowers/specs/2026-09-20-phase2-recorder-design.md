@@ -444,3 +444,32 @@ unchanged, except that the bucket
 (`fundr-recorder-801242831140-us-east-1`) is in `us-east-1` while the instance is in
 `eu-central-1`; that is fine for S3 (cross-region access is a data-transfer charge, not a
 permission problem) and adds roughly $0.02/GB egress to the upload cost once uploads are enabled.
+
+## Review corrections, fifth round
+
+**Deviation: deployment is an rsync of the working tree, not `deploy/user_data.sh` cloning over
+git.** The brief called for the instance to fetch its own code at boot, via `user_data.sh`
+cloning the private repo with a read-only deploy key stored on the instance
+(`task-10-brief.md`, "Mint a read-only deploy key"). Task 10 deployed differently:
+`deploy/bootstrap.sh` accepts `FUNDR_REPO` as optional, and when it is unset (as it is on both
+the `us-east-1` and `eu-central-1` instances), it does not clone anything — it expects the
+working tree to already be present at `/opt/fundr`, delivered by `rsync --rsync-path="sudo
+rsync"` over the operator's existing SSH connection (see the runbook, "Redeploy a new commit").
+
+**Why:** a deploy key is read-only for *code*, but it is still a private key that has to live on
+the instance to be useful, and this design's stated goal is that **no secret that could reach
+GitHub exists on the box at all** — the instance already carries no S3 credential and no instance
+role by the third-round deviation; adding a git deploy key back in would reopen exactly the kind
+of standing credential the rest of the design avoids. rsync needs no credential on the receiving
+end beyond the SSH access the operator already has to deploy anything else (env, systemd units).
+
+**Cost of the deviation:** deployment is no longer self-contained at boot — a fresh instance
+cannot bootstrap itself from `user_data.sh` alone; it needs one rsync push from the operator's
+machine before the first `bootstrap.sh` run. This is a manual step, not an automated one, on top
+of what the brief specified. It does not affect the running recorder or its data, only how a new
+instance or a new commit gets code onto the box.
+
+**Condition for reverting:** if a public repo (or a secrets manager delivering a short-lived,
+narrowly-scoped deploy token at boot rather than a static key file) becomes available, set
+`FUNDR_REPO` and `bootstrap.sh` will clone/checkout instead of expecting an out-of-band rsync,
+matching the brief's original design without further code changes.

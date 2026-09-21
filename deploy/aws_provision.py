@@ -353,19 +353,92 @@ def do_apply(ec2, ssm, s3, cidr: str) -> Plan:
     return build_plan(ec2, ssm, s3, cidr)
 
 
+def _check(ok_list: list[bool], name: str, cond: bool, detail: str = "") -> bool:
+    mark = "PASS" if cond else "FAIL"
+    suffix = f" -- {detail}" if detail else ""
+    print(f"[{mark}] {name}{suffix}")
+    ok_list.append(cond)
+    return cond
+
+
+def verify(ec2, s3) -> bool:
+    """Re-read every resource this script (and the S3 setup that predates it) claims to have
+    created, and ASSERT its configuration -- not just that it exists, but that it is still
+    shaped the way the design requires. Every check prints PASS or FAIL; nothing here changes
+    anything. This is the brief's `verify` subcommand: until now the bucket assertions in
+    particular only existed as pasted `aws` output in a task report, which nobody re-runs."""
+    results: list[bool] = []
+    vpc = default_vpc(ec2)
+
+    sg = find_sg(ec2, vpc)
+    if _check(results, "security group exists", sg is not None):
+        perms = sg["IpPermissions"]
+        if _check(results, "security group has exactly one ingress rule", len(perms) == 1,
+                  f"found {len(perms)}"):
+            r = perms[0]
+            ranges = r.get("IpRanges", [])
+            _check(results, "the one ingress rule is tcp/22",
+                  r.get("IpProtocol") == "tcp" and r.get("FromPort") == 22 and r.get("ToPort") == 22,
+                  f"{r.get('IpProtocol')}/{r.get('FromPort')}-{r.get('ToPort')}")
+            _check(results, "the one ingress rule is from exactly one /32",
+                  len(ranges) == 1 and ranges[0].get("CidrIp", "").endswith("/32"),
+                  str([x.get("CidrIp") for x in ranges]))
+
+    inst = find_instance(ec2)
+    if _check(results, "instance exists", inst is not None):
+        profile = inst.get("IamInstanceProfile")
+        _check(results, "instance has no instance profile", not profile, f"found {profile}")
+        vol_ids = [b["Ebs"]["VolumeId"] for b in inst.get("BlockDeviceMappings", []) if "Ebs" in b]
+        if _check(results, "instance has a root volume attached", bool(vol_ids)):
+            for v in ec2.describe_volumes(VolumeIds=vol_ids)["Volumes"]:
+                _check(results, f"volume {v['VolumeId']} is encrypted", bool(v.get("Encrypted")))
+
+    try:
+        vers = s3.get_bucket_versioning(Bucket=BUCKET).get("Status")
+        _check(results, "bucket versioning is Enabled", vers == "Enabled", f"got {vers!r}")
+    except ClientError as e:
+        _check(results, "bucket versioning readable", False, str(e))
+
+    try:
+        pab = s3.get_public_access_block(Bucket=BUCKET)["PublicAccessBlockConfiguration"]
+        _check(results, "bucket public-access-block is all-true", all(pab.values()), str(pab))
+    except ClientError as e:
+        _check(results, "bucket public-access-block readable", False, str(e))
+
+    try:
+        rules = s3.get_bucket_lifecycle_configuration(Bucket=BUCKET)["Rules"]
+        _check(results, "bucket has exactly two lifecycle rules", len(rules) == 2, f"found {len(rules)}")
+        has_noncurrent_expiry = any(r.get("NoncurrentVersionExpiration", {}).get("NoncurrentDays")
+                                   for r in rules)
+        has_ia_transition = any(
+            t.get("StorageClass") == "STANDARD_IA" for r in rules for t in r.get("Transitions", []))
+        _check(results, "one lifecycle rule expires noncurrent versions", has_noncurrent_expiry)
+        _check(results, "one lifecycle rule transitions current objects to STANDARD_IA", has_ia_transition)
+    except ClientError as e:
+        _check(results, "bucket lifecycle configuration readable", False, str(e))
+
+    print()
+    passed, total = sum(results), len(results)
+    print(f"{passed}/{total} checks passed")
+    return all(results)
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("action", choices=["plan", "apply"])
+    ap.add_argument("action", choices=["plan", "apply", "verify"])
     ap.add_argument("--cidr", default=None, help="SSH source CIDR; defaults to this host's public IP /32")
     ap.add_argument("--json", action="store_true", help="also print resource ids as JSON")
     args = ap.parse_args(argv)
 
-    cidr = args.cidr or my_ip()
     session = boto3.session.Session(region_name=REGION)
     ec2 = session.client("ec2")
     ssm = session.client("ssm")
     s3 = session.client("s3")
 
+    if args.action == "verify":
+        return 0 if verify(ec2, s3) else 1
+
+    cidr = args.cidr or my_ip()
     if args.action == "plan":
         p = build_plan(ec2, ssm, s3, cidr)
         print_plan(p)

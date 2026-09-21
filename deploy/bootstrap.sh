@@ -80,6 +80,13 @@ systemd-analyze verify /etc/systemd/system/fundr-recorder.service \
                        /etc/systemd/system/fundr-upload.service \
                        /etc/systemd/system/fundr-upload.timer
 systemctl daemon-reload
-systemctl enable --now fundr-recorder.service
-systemctl enable --now fundr-upload.timer
+systemctl enable fundr-recorder.service
+systemctl enable fundr-upload.timer
+# `enable --now` is a no-op on a unit that is already active -- a redeploy would rewrite
+# /etc/fundr/recorder.env (new FUNDR_GIT_SHA) while the already-running process kept stamping
+# the OLD sha into every record's provenance. `restart` (not `try-restart`, since the very
+# first bootstrap has nothing running yet to restart, and `restart` also starts a stopped
+# unit) guarantees every bootstrap run picks up the new environment and code.
+systemctl restart fundr-recorder.service
+systemctl restart fundr-upload.timer
 systemctl --no-pager status fundr-recorder.service

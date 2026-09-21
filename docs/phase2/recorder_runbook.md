@@ -104,8 +104,9 @@ ssh -i /Users/jerryinyang/Trading/fundr/auth/fundr-recorder-eu.pem ec2-user@18.1
 ```
 
 The security group allows inbound TCP 22 **from one address only** — the operator's public IP as a
-/32, `193.19.207.103/32` at provisioning time. Password authentication is off in the AMI, so the
-key file is the only way in. Never commit it, never copy it to another machine you do not control.
+/32 (set this to your current IP; find it with `curl https://checkip.amazonaws.com`). Password
+authentication is off in the AMI, so the key file is the only way in. Never commit it, never copy
+it to another machine you do not control.
 
 **When your IP changes** (new network, ISP re-assignment, VPN on or off), SSH will simply hang and
 time out. Re-authorise:
@@ -133,7 +134,42 @@ boto3.client('ec2', region_name='eu-central-1').revoke_security_group_ingress(
                     'IpRanges':[{'CidrIp':'OLD.IP.HERE/32'}]}])"
 ```
 
-## Read health
+`uv run python deploy/aws_provision.py verify` re-reads every provisioned resource and asserts
+its configuration (security group has exactly one ingress rule, tcp/22, from exactly one /32;
+instance has no instance profile; the root volume is encrypted; the bucket has versioning
+enabled, public-access-block all-true, and both lifecycle rules), printing PASS/FAIL per
+assertion and exiting non-zero on any failure. Run it after any change to the account or after
+pruning ingress rules above, to confirm nothing else moved.
+
+## Daily check (the seven-day gate's only defence)
+
+There is no alerting on this recorder. `scripts/daily_check.py` is the documented daily
+procedure for the spec's "seven consecutive days at `status: ok`" Done-when clause — run it once
+a day, by hand or on a schedule, for the full seven days:
+
+```bash
+uv run python scripts/daily_check.py
+```
+
+It SSHes in read-only (never writes to the instance), prints status, per-feed coverage /
+reconnects / open gaps / last-write age, and disk free, and exits:
+
+- **0** — `status: ok`, `health.json` was generated recently, and at least one feed has real
+  (non-null) coverage. The only exit code that counts as a good day.
+- **1** — reachable, but something is wrong: `status` isn't `ok`, `health.json` is stale (see
+  below), every feed's coverage is still `null`, or disk free has dropped under 1 GB.
+- **2** — could not reach the instance, read `health.json`, or find the SSH key at all.
+
+**Why staleness matters as much as `status` itself**: `health.json` is only rewritten by the live
+recorder process. If that process dies and never restarts, the file freezes at its last value —
+often `ok` — and a check that only reads `status` would report a healthy recorder for as long as
+the file happens to say so, which is exactly the venv-destruction-style incident this design has
+no other defence against. `daily_check.py` therefore also fails if `generated_ms` is more than
+five minutes old, regardless of what `status` says.
+
+Run it against a different instance or key with `--host`/`--key`/`--data-dir`; see `--help`.
+
+## Read health (manual / ad hoc)
 
 ```bash
 ssh -i .../fundr-recorder-eu.pem ec2-user@18.196.234.242 'sudo cat /var/lib/fundr/health.json' | jq .

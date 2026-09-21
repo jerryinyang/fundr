@@ -1,6 +1,8 @@
 # Day-one validation
 
-Status: **PASS on both venues**, real recorded data, current instance.
+Status: **Lighter PASS (100% exact, 214 market-hours); HL INSUFFICIENT sample** (70 off-baseline
+market-hours, below the 100-hour minimum this script now requires before printing a verdict — see
+*Minimum sample size*, below). Real recorded data, current instance.
 
 ## What ran
 
@@ -38,11 +40,12 @@ HL last-in-hour vs closing settlement (all coin-hours): {'n': 234, 'n_match': 16
 HL residual (all): median 0.0 max 4.772000000000435e-07
 HL off-baseline (|settled| > 1.5e-05): {'n': 70, 'n_match': 0, 'rate': 0.0, 'mean_signed_error': 3.4995714285714205e-08}
 HL residual (off-baseline): median 7.370000000000236e-08 max 4.772000000000435e-07 min 1.1000000000091882e-09
+HL: INSUFFICIENT sample -- 70 off-baseline market-hours, need >= 100 to report a verdict
 LIGHTER PASS
-HL PASS
+HL INSUFFICIENT
 ```
 
-Script exit code: **0**.
+Script exit code: **1** (non-zero because HL is `INSUFFICIENT`, not because anything failed).
 
 ## Hours included / excluded
 
@@ -68,7 +71,7 @@ matches P9's laptop-side finding (21/21) at full production scale (214 markets, 
 recorder, not a sample) and confirms the capture rule the recorder exists to get right: the
 pre-boundary value is not missed. No hour failed; there is nothing to investigate.
 
-### Hyperliquid — **PASS**
+### Hyperliquid — **INSUFFICIENT sample** (behaviour itself looks correct, but 70 < 100)
 
 Same split as the previous (`us-east-1`) run, now on Frankfurt-recorded data, applied per
 P4/P9's methodology (`fundr.analysis.rebuild_verdict`'s baseline/off-baseline split): of 234 kept
@@ -79,9 +82,32 @@ trivially) and **70 are off-baseline** — the informative population:
   **7.37e-8**, min **1.1e-9**, max **4.77e-7**.
 
 Squarely inside the expected ~1e-9–1e-4 band with no exact match, consistent with P4 (~4e-7–1.3e-6
-archived) and P9 (mean 2.52e-7, max 1.07e-6 live) and with the prior `us-east-1` run (median
-7.74e-8, max 1.03e-6) — the running `funding` value behaves the same way on the relocated
-instance as it did before the move and as Phase 1 found independently.
+archived), P9 (mean 2.52e-7, max 1.07e-6 live) and the prior `us-east-1` run (median 7.74e-8, max
+1.03e-6) — the running `funding` value behaves the same way on the relocated instance as before
+the move. **But `scripts/validate_day1.py` no longer prints PASS on this alone**: 70 off-baseline
+coin-hours is below `MIN_SAMPLE = 100` (matching `fundr.analysis.rebuild_verdict`'s own
+`min_off_baseline=100` and the spec's Done-when bar), so the script reports `HL: INSUFFICIENT`
+instead. One sealed hour cannot produce 100 off-baseline coin-hours by itself — that needs either
+more sealed hours or a broader coin sample; see *Minimum sample size*, below.
+
+**Independent confirmation on a larger sample.** A reviewer separately audited AWS directly and
+re-ran the same validation on 468 market-hours (spanning more than the single sealed hour used
+above), reproducing both this run's numbers and the baseline-split reasoning: 0/132 off-baseline
+coin-hours matched exactly, residual median 1.16e-7. That sample clears `MIN_SAMPLE` and points
+the same direction as the 70-hour sample here, but it was not reproduced from scratch in this
+document — it stands as the reviewer's own finding, cited for context.
+
+## Minimum sample size
+
+`scripts/validate_day1.py` previously reported PASS on `n > 0` for either venue — a single
+surviving market-hour that happened to match would print PASS, which is not a defensible claim
+for a check whose whole purpose is confidence at scale. It now requires **`MIN_SAMPLE = 100`**
+(HL: off-baseline coin-hours; Lighter: complete market-hours) before printing PASS or FAIL at
+all; below that it prints a distinct `INSUFFICIENT` verdict with the count, and the script still
+exits non-zero so an `INSUFFICIENT` run is never mistaken for a clean pass. Today's Lighter run
+(214) clears the bar; today's HL run (70) does not — reporting that honestly is the correct
+outcome of this run, not a regression from the previous version of this document (which reported
+HL as PASS before this gate existed).
 
 ## Note on the check itself
 
@@ -92,16 +118,30 @@ attempts / 20 s) so a transient rate limit doesn't abort the whole verdict. This
 fix to the script's own HTTP client usage, not a change to what is being checked or how a pass/fail
 is judged.
 
+Separately, the Lighter settled series is now paged via `LighterAPI.fundings_all` instead of a
+single `fundings(..., count_back=30)` call: the fixed count silently truncated the settled series
+for any window spanning more than ~30 settlements, which could then drop kept hours out of the
+join without any warning. `attach_settled`'s join is also now checked explicitly for hours that
+survive `complete_hours` but find no matching settlement (`_report_unsettled`), instead of letting
+`drop_nulls("settled")` remove them silently.
+
 ## What remains before Phase 2a's Done-when is met
 
-Both feeds now behave exactly as Phase 1 predicted, on the deployed recorder, but the elapsed-time
-gates from the brief's "After Task 11" section are unaffected by a single sealed hour:
+Both feeds behave exactly as Phase 1 predicted, on the deployed recorder, but the elapsed-time
+gates from the brief's "After Task 11" section are unaffected by a single sealed hour, and HL's
+own verdict here is `INSUFFICIENT`, not `PASS`, until more hours accumulate:
 
 1. **Seven consecutive days at `status: ok`** — the clock restarted with the Frankfurt move on
-   2026-09-21; one sealed hour is not seven days.
-2. **Lighter formula re-validation** (`probes/p07_lighter_formula_check.py` against the recorder's
+   2026-09-21; one sealed hour is not seven days. `scripts/daily_check.py` is the documented daily
+   procedure for this gate (see the runbook's "Daily check" section) and now also fails on a
+   stale `health.json` (the recorder died and the file froze) or all-null coverage (too early to
+   judge), not just on `status != ok`.
+2. **Re-run this validation once more hours have sealed**, to clear HL's `MIN_SAMPLE = 100`
+   off-baseline threshold with data reproduced in this document rather than cited from the
+   reviewer's separate audit.
+3. **Lighter formula re-validation** (`probes/p07_lighter_formula_check.py` against the recorder's
    own premium history) — needs ≥100 off-baseline market-hours, more than one day, at least one
    negative-settling hour, and a multiplier ≠ 1 market if one exists. Not yet attempted; one hour
    of history is far short of the sample size required.
-3. **`health.json` readable from S3 without SSH** — blocked on IAM permissions per the runbook's
+4. **`health.json` readable from S3 without SSH** — blocked on IAM permissions per the runbook's
    "To finish the S3 setup"; unrelated to this validation.

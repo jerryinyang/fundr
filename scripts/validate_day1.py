@@ -14,10 +14,17 @@ those two hours fail by construction and the script would print a false FAIL on 
 recorder. Excluding hours whose last record lands more than MAX_LAG_S before the hour boundary
 fixes this: the running premium is cumulative, so a late START doesn't matter, only a
 late-enough LAST reading does (P7, "coverage filters").
+
+A verdict of PASS requires a large-enough sample, not just n > 0: `fundr.analysis.rebuild_verdict`
+uses `min_off_baseline=100` for exactly this reason, and the spec's Done-when clause demands >=100
+off-baseline market-hours for Lighter's formula re-validation. A single surviving market-hour that
+happens to match is not evidence a venue's capture is correct; below the threshold this script
+reports a distinct INSUFFICIENT verdict (with the count) rather than printing PASS.
 """
 import argparse
 import gzip
 import json
+import sys
 import time
 from pathlib import Path
 
@@ -28,18 +35,15 @@ from fundr.analysis import attach_settled, epoch_ms, match_stats, reported_toler
 from fundr.sources.hl_api import HLInfo, funding_history_frame
 from fundr.sources.lighter_api import LighterAPI, fundings_frame
 
-ap = argparse.ArgumentParser()
-ap.add_argument("--root", required=True, help="directory holding recorder parts (hl_state/, lighter_state/, ...)")
-args = ap.parse_args()
-root = Path(args.root)
-
-
 HOUR_MS = 3_600_000
 MAX_LAG_S = 120  # P7's coverage filter: only a late-enough LAST reading invalidates an hour,
                  # because the running premium is cumulative.
 MIN_N = 5        # plausible record count for a market-hour that was actually observed
 BASELINE_ABS = 1.5e-5  # HL's per-hour interest floor is +-0.0000125; a few zero-interest
                        # markets settle at 0.0 -- both are "baseline" (see validate_hl below)
+MIN_SAMPLE = 100  # fundr.analysis.rebuild_verdict's own min_off_baseline, and the spec's
+                  # Done-when bar (>=100 off-baseline market-hours). Below this a PASS is not
+                  # a defensible claim, whatever the match rate says.
 
 
 def _hl_funding_history_with_backoff(api: HLInfo, coin: str, start_ms: int, end_ms: int) -> list[dict]:
@@ -75,7 +79,7 @@ def _read_gz(path: Path) -> list[str]:
     return lines
 
 
-def read(feed: str) -> list[dict]:
+def read(root: Path, feed: str) -> list[dict]:
     out = []
     for p in sorted((root / feed).rglob("*.jsonl.gz")):
         for line in _read_gz(p):
@@ -101,11 +105,39 @@ def complete_hours(df: pl.DataFrame, label: str) -> pl.DataFrame:
     return kept
 
 
-def validate_lighter(root: Path) -> tuple[dict | None, bool]:
-    rows = read("lighter_state")
+def lighter_verdict(stats: dict) -> str:
+    """Pure judgement over `match_stats`' output -- separated from I/O and network calls so the
+    MIN_SAMPLE gate is unit-testable without a live venue or recorded data."""
+    if stats["n"] < MIN_SAMPLE:
+        return "INSUFFICIENT"
+    return "PASS" if stats["rate"] == 1.0 else "FAIL"
+
+
+def hl_verdict(off_stats: dict, median_resid: float | None) -> str:
+    """Pure judgement over the off-baseline `match_stats` output and its residual median."""
+    if off_stats["n"] < MIN_SAMPLE:
+        return "INSUFFICIENT"
+    if off_stats["rate"] == 0.0 and median_resid is not None and 1e-9 < median_resid < 1e-4:
+        return "PASS"
+    return "FAIL"
+
+
+def _report_unsettled(joined_before: int, joined_after: int, label: str) -> None:
+    """`attach_settled` left-joins onto the settled series; a kept hour with no matching
+    settlement (venue API didn't return it, paging bug, market delisted mid-window, ...) must
+    not vanish silently via drop_nulls -- report it so a real coverage gap in the SETTLED side
+    is visible instead of just shrinking the denominator."""
+    dropped = joined_before - joined_after
+    if dropped:
+        print(f"{label}: {dropped} kept hour(s) had no matching settlement and were dropped "
+              f"(venue's settled series didn't cover them) -- investigate before trusting the rate")
+
+
+def validate_lighter(root: Path) -> tuple[dict | None, str]:
+    rows = read(root, "lighter_state")
     if not rows:
         print("Lighter: no data (feed produced zero non-gap records)")
-        return None, False
+        return None, "NO DATA"
     li = pl.DataFrame([{"market_id": r["payload"]["market_id"],
                         "symbol": r["payload"].get("symbol"),
                         "t_ms": r["t_ms"],
@@ -119,28 +151,38 @@ def validate_lighter(root: Path) -> tuple[dict | None, bool]:
     li_last = complete_hours(li_last, "Lighter")
     if li_last.is_empty():
         print("Lighter: no complete market-hours to check")
-        return None, False
+        return None, "NO DATA"
 
     lapi = LighterAPI()
     t0, t1 = int(li["t_ms"].min()) // 1000, int(li["t_ms"].max()) // 1000
-    settled = pl.concat([fundings_frame(lapi.fundings(m, "1h", t0 - 3600, t1 + 7200, 30), m)
+    # fundings_all pages internally (no fixed count cap) -- a fixed `count_back` on a single
+    # `fundings()` call silently truncates the settled series once a market-hour window spans
+    # more settlements than that count, which then drops kept hours out from under
+    # attach_settled's join without any warning.
+    settled = pl.concat([fundings_frame(lapi.fundings_all(m, "1h", t0 - 3600, t1 + 7200), m)
                          for m in li["market_id"].unique().to_list()])
     ltol = reported_tolerance(settled["rate_str"].to_list())
-    j = attach_settled(li_last,
-                       settled.select("market_id", "settle_time",
-                                      pl.col("signed_rate").alias("settled")),
-                       "market_id").drop_nulls("settled")
+    j_all = attach_settled(li_last,
+                           settled.select("market_id", "settle_time",
+                                          pl.col("signed_rate").alias("settled")),
+                           "market_id")
+    j = j_all.drop_nulls("settled")
+    _report_unsettled(len(j_all), len(j), "Lighter")
     lighter_stats = match_stats(j["cfr_last"], j["settled"], ltol)
     print("Lighter last-in-hour vs closing settlement:", lighter_stats)
-    lighter_ok = lighter_stats["n"] > 0 and lighter_stats["rate"] == 1.0
-    return lighter_stats, lighter_ok
+
+    verdict = lighter_verdict(lighter_stats)
+    if verdict == "INSUFFICIENT":
+        print(f"Lighter: INSUFFICIENT sample -- {lighter_stats['n']} complete market-hours, "
+              f"need >= {MIN_SAMPLE} to report a verdict")
+    return lighter_stats, verdict
 
 
-def validate_hl(root: Path) -> tuple[dict | None, bool]:
-    hl_rows = read("hl_state")
+def validate_hl(root: Path) -> tuple[dict | None, str]:
+    hl_rows = read(root, "hl_state")
     if not hl_rows:
         print("HL: no data (feed produced zero non-gap records)")
-        return None, False
+        return None, "NO DATA"
     hl = pl.DataFrame([{"coin": r["payload"]["coin"], "t_ms": r["t_ms"],
                         "funding": float(r["payload"]["ctx"]["funding"])}
                        for r in hl_rows if r["payload"]["ctx"].get("funding") is not None])
@@ -152,7 +194,7 @@ def validate_hl(root: Path) -> tuple[dict | None, bool]:
     hl_last = complete_hours(hl_last, "HL")
     if hl_last.is_empty():
         print("HL: no complete market-hours to check")
-        return None, False
+        return None, "NO DATA"
 
     api = HLInfo()
     # Query every coin that actually has a complete hour, not an arbitrary subset -- a fixed
@@ -163,10 +205,12 @@ def validate_hl(root: Path) -> tuple[dict | None, bool]:
         [r for c in coins for r in _hl_funding_history_with_backoff(
             api, c, int(hl["t_ms"].min()) - 3_600_000, int(hl["t_ms"].max()) + 7_200_000)])
     htol = reported_tolerance(hl_settled["funding_rate_str"].to_list())
-    hj = attach_settled(hl_last,
-                        hl_settled.select("coin", "settle_time",
-                                          pl.col("funding_rate").alias("settled")),
-                        "coin").drop_nulls("settled")
+    hj_all = attach_settled(hl_last,
+                            hl_settled.select("coin", "settle_time",
+                                              pl.col("funding_rate").alias("settled")),
+                            "coin")
+    hj = hj_all.drop_nulls("settled")
+    _report_unsettled(len(hj_all), len(hj), "HL")
     hl_stats = match_stats(hj["funding_last"], hj["settled"], htol)
     resid = (hj["funding_last"] - hj["settled"]).abs()
     print("HL last-in-hour vs closing settlement (all coin-hours):", hl_stats)
@@ -186,7 +230,8 @@ def validate_hl(root: Path) -> tuple[dict | None, bool]:
     if off.is_empty():
         print("HL: no off-baseline coin-hours in this sample -- cannot judge the behaviour that "
               "actually matters (every kept hour happened to settle at the interest floor).")
-        off_stats, resid_off = None, None
+        off_stats, resid_off = {"n": 0, "n_match": 0, "rate": float("nan"),
+                                "mean_signed_error": float("nan")}, None
     else:
         off_stats = match_stats(off["funding_last"], off["settled"], htol)
         resid_off = (off["funding_last"] - off["settled"]).abs()
@@ -194,18 +239,26 @@ def validate_hl(root: Path) -> tuple[dict | None, bool]:
         print("HL residual (off-baseline): median", float(resid_off.median()),
               "max", float(resid_off.max()), "min", float(resid_off.min()))
 
-    hl_ok = (off_stats is not None and off_stats["n"] > 0 and off_stats["rate"] == 0.0
-              and 1e-9 < float(resid_off.median()) < 1e-4)
-    return off_stats if off_stats is not None else hl_stats, hl_ok
+    median_resid = float(resid_off.median()) if resid_off is not None else None
+    verdict = hl_verdict(off_stats, median_resid)
+    if verdict == "INSUFFICIENT":
+        print(f"HL: INSUFFICIENT sample -- {off_stats['n']} off-baseline market-hours, "
+              f"need >= {MIN_SAMPLE} to report a verdict")
+    return off_stats, verdict
 
 
-def main() -> int:
-    lighter_stats, lighter_ok = validate_lighter(root)
-    hl_stats, hl_ok = validate_hl(root)
-    print("LIGHTER", "PASS" if lighter_ok else ("FAIL" if lighter_stats is not None else "NO DATA"))
-    print("HL", "PASS" if hl_ok else ("FAIL" if hl_stats is not None else "NO DATA"))
-    return 0 if (lighter_ok and hl_ok) else 1
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--root", required=True, help="directory holding recorder parts (hl_state/, lighter_state/, ...)")
+    args = ap.parse_args(argv)
+    root = Path(args.root)
+
+    lighter_stats, lighter_verdict = validate_lighter(root)
+    hl_stats, hl_verdict = validate_hl(root)
+    print("LIGHTER", lighter_verdict)
+    print("HL", hl_verdict)
+    return 0 if (lighter_verdict == "PASS" and hl_verdict == "PASS") else 1
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    sys.exit(main())
