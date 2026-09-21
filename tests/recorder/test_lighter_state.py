@@ -170,3 +170,116 @@ async def test_timers_label_the_pre_boundary_snapshots_boundary(tmp_path):
     assert boundary[-1]["payload"]["premium"] == "0.0099"
     # Both land in the closing hour's partition, not the next one.
     assert all(r["t_ms"] < HOUR * 101 for r in boundary)
+
+
+class _FakeConn:
+    """Async context manager mimicking a websockets connection: __aenter__ yields an object
+    with async send/recv, __aexit__ performs the (bounded) close. This is the shape
+    LighterStateFeed actually needs from `connect` -- not the send/recv/close object the
+    module's old docstring wording implied."""
+
+    def __init__(self, tag, on_recv=None):
+        self.tag = tag
+        self.sent: list[str] = []
+        self._recv_calls = 0
+        self._on_recv = on_recv
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return False
+
+    async def send(self, msg: str) -> None:
+        self.sent.append(msg)
+        await asyncio.sleep(0)
+
+    async def recv(self) -> str:
+        self._recv_calls += 1
+        if self._on_recv is not None:
+            self._on_recv(self)
+        if self.tag == "first":
+            if self._recv_calls == 1:
+                return json.dumps(_stats(market_id=1, premium="0.0099"))
+            raise ConnectionError("dropped")   # simulate the socket dying
+        await asyncio.Future()                 # second connection: never delivers another
+                                                # frame; only cancellation ends this await
+
+
+async def test_connect_subscribe_drop_reconnect_boundary_still_fires(tmp_path):
+    """Full connection-path coverage (run/_connections/_reader/_sync_subscriptions), which had
+    zero tests before this fix round. It exercises: a sibling task rebinding the wanted-market
+    set mid-sync (the aliasing bug in finding 1), a socket drop forcing a reconnect, and proves
+    the boundary snapshot still fires across that reconnect because the timers never lived
+    inside the connection loop."""
+    state = {"wall": HOUR * 101 - 200_000}      # HH:56:40
+    stop = asyncio.Event()
+
+    async def sleep(seconds: float) -> None:
+        state["wall"] += int(seconds * 1000)
+        if state["wall"] >= HOUR * 101 + 30_000:
+            stop.set()
+        await asyncio.sleep(0)
+
+    clock = Clock(now_ms=lambda: state["wall"], mono_ns=lambda: 0, sleep=sleep)
+    w = HourlyWriter(tmp_path, "lighter_state")
+    feed = LighterStateFeed(Config(root=tmp_path), w, Health(clock), clock)
+    feed.set_markets([1, 2])
+
+    connections: list[_FakeConn] = []
+    captured: dict = {}
+
+    def on_recv(conn):
+        # By the time recv() is ever called, _sync_subscriptions has already fully run for
+        # this connection. Capture its result here, before the drop, so a fix regression
+        # (finding 1's aliasing) is visible even though the impending reconnect would
+        # otherwise erase the evidence by clearing _subscribed again.
+        if conn.tag == "first" and conn._recv_calls == 1:
+            captured["subscribed_after_first_sync"] = sorted(feed._subscribed)
+            captured["pending_after_first_sync"] = list(feed.pending_subscribe)
+            captured["first_sent"] = list(conn.sent)
+
+    def connect():
+        tag = "first" if not connections else "second"
+        conn = _FakeConn(tag, on_recv=on_recv)
+        connections.append(conn)
+        if tag == "first":
+            # Simulate a sibling task (the universe sweep) rebinding the wanted-market set
+            # while `_sync_subscriptions` is still mid-flight, awaiting an earlier send.
+            real_send = conn.send
+
+            async def send(msg: str) -> None:
+                await real_send(msg)
+                if '"market_stats/2"' in msg:
+                    feed.set_markets([1, 2, 300])
+
+            conn.send = send
+        return conn
+
+    feed._connect = connect
+
+    await asyncio.wait_for(feed.run(stop), timeout=5)
+    w.close()
+
+    # finding 1: only the markets actually sent-for on the first connection ended up marked
+    # subscribed; the market injected mid-sync must not be marked subscribed for free.
+    assert captured["subscribed_after_first_sync"] == [1, 2]
+    assert captured["pending_after_first_sync"] == [300]
+    sent_channels = {json.loads(m)["channel"] for m in captured["first_sent"]}
+    assert sent_channels == {"market_stats/1", "market_stats/2"}
+
+    # The socket dropped after the first message and had to reconnect (a second connection
+    # was actually opened).
+    assert len(connections) == 2
+    assert connections[1].tag == "second"
+
+    # The boundary snapshot for the closing hour still fired, across that reconnect, because
+    # the timers live outside the connection loop.
+    rows = _rows(tmp_path)
+    boundary = [r for r in rows if r.get("trigger") == "boundary"]
+    assert boundary, [r.get("trigger") for r in rows]
+    assert boundary[-1]["payload"]["premium"] == "0.0099"
+
+    # The drop was recorded with a real (non-zero) width, not from_ms == to_ms.
+    gaps = [r for r in rows if r.get("type") == "gap"]
+    assert any(g["to_ms"] > g["from_ms"] for g in gaps), gaps

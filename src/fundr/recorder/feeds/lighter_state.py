@@ -33,6 +33,11 @@ WATCHED = ("premium", "current_funding_rate")
 class LighterStateFeed:
     def __init__(self, cfg: Config, writer: HourlyWriter, health: Health, clock: Clock,
                  connect=None):
+        """connect: an injectable async factory returning an ASYNC CONTEXT MANAGER — not an
+        object with its own `close()`. `_connections` does the equivalent of
+        `async with self._connect() as ws: ...` by hand (`__aenter__`/`__aexit__`, both bounded
+        by asyncio.wait_for), so the object `__aenter__` yields only needs `async send(str)`
+        and `async recv() -> str`; closing happens through `__aexit__`."""
         self._cfg = cfg
         self._w = writer
         self._health = health
@@ -65,6 +70,19 @@ class LighterStateFeed:
 
     def mark_unsubscribed(self, market_ids: list[int]) -> None:
         self._subscribed -= set(market_ids)
+        # A genuinely delisted (or rebalanced-out) market must stop being written forever,
+        # not just stop being "subscribed": snapshot() iterates _latest, so leaving these
+        # dicts populated would emit stale records for it every heartbeat indefinitely.
+        # This is never reached by an ordinary reconnect, which never unsubscribes anything
+        # (rule 4: _latest is untouched by a reconnect, only by a real unsubscribe).
+        for mid in market_ids:
+            self._latest.pop(mid, None)
+            self._last_msg_ms.pop(mid, None)
+            self._ws_ts.pop(mid, None)
+            self._ws_type.pop(mid, None)
+            self._watched.pop(mid, None)
+            self._n_msgs.pop(mid, None)
+            self._n_changes.pop(mid, None)
         self.set_markets(sorted(self._wanted))
 
     # --- capture ----------------------------------------------------------
@@ -109,6 +127,13 @@ class LighterStateFeed:
         last = self._last_msg_ms.get(mid)
         return None if last is None else t_ms - last
 
+    def _last_activity_ms(self) -> int | None:
+        """The true start of a gap: the last time ANY subscribed market produced a message.
+        Without this, every gap record reports from_ms == to_ms == "now", so "how long was
+        the feed actually dark" is unrecoverable from the data (compare universe.py, which
+        threads the real fetch window through)."""
+        return max(self._last_msg_ms.values()) if self._last_msg_ms else None
+
     def _is_stale(self, mid: int, t_ms: int) -> bool:
         """Per market, and age-based rather than interval-counted: it stays correct across a
         reconnect and across the irregular spacing of the boundary snapshots."""
@@ -152,29 +177,44 @@ class LighterStateFeed:
     async def _connections(self, stop: asyncio.Event) -> None:
         while not stop.is_set():
             try:
-                async with self._connect() as ws:
+                # Manual async-with: `ctx.__aenter__()` is the handshake, and it is the one
+                # network call the brief's own draft left unbounded. `__aexit__` (the close)
+                # gets the same bound, so a hung close cannot stop `stop` from being observed.
+                ctx = self._connect()
+                ws = await asyncio.wait_for(ctx.__aenter__(), timeout=self._cfg.watchdog_s)
+                try:
                     self._subscribed.clear()
                     self.set_markets(sorted(self._wanted))
                     await self._sync_subscriptions(ws)
                     self.needs_reconnect = False
                     self._silent_intervals = 0
+                    self._health.gap_close(FEED, self._clock.now_ms())
                     await self._reader(ws, stop)
+                finally:
+                    await asyncio.wait_for(ctx.__aexit__(None, None, None),
+                                           timeout=self._cfg.watchdog_s)
                 if self.needs_reconnect and not stop.is_set():
-                    t_ms = self._clock.now_ms()
-                    self._w.write(records.gap(FEED, VENUE, self._seq.next(), t_ms=t_ms,
-                                              mono_ns=self._clock.mono_ns(), from_ms=t_ms,
-                                              to_ms=t_ms, reason="stall_reconnect"))
-                    self._health.reconnect(FEED)
+                    self._open_gap("stall_reconnect")
             except asyncio.CancelledError:
                 raise
             except Exception as e:  # deliberate: a 24/7 feed must survive every ws error,
                 # and the error is recorded in the data rather than lost to a crash.
-                t_ms = self._clock.now_ms()
-                self._w.write(records.gap(FEED, VENUE, self._seq.next(), t_ms=t_ms,
-                                          mono_ns=self._clock.mono_ns(), from_ms=t_ms,
-                                          to_ms=t_ms, reason=f"ws_error:{type(e).__name__}"))
-                self._health.reconnect(FEED)
+                self._open_gap(f"ws_error:{type(e).__name__}")
                 await self._clock.sleep(5)
+
+    def _open_gap(self, reason: str) -> None:
+        """from_ms is the last time we actually heard from the venue, not `now` — a gap
+        record with from_ms == to_ms always claims zero width, which is exactly the width a
+        gap this feed exists to notice never has."""
+        t_ms = self._clock.now_ms()
+        from_ms = self._last_activity_ms()
+        if from_ms is None:
+            from_ms = t_ms
+        self._w.write(records.gap(FEED, VENUE, self._seq.next(), t_ms=t_ms,
+                                  mono_ns=self._clock.mono_ns(), from_ms=from_ms,
+                                  to_ms=t_ms, reason=reason))
+        self._health.gap_open(FEED, from_ms)
+        self._health.reconnect(FEED)
 
     async def _send(self, ws, obj: dict) -> None:
         # Global Constraint: every network call is bounded out-of-band. A reconnect issues
@@ -182,22 +222,60 @@ class LighterStateFeed:
         await asyncio.wait_for(ws.send(json.dumps(obj)), timeout=self._cfg.watchdog_s)
 
     async def _sync_subscriptions(self, ws) -> None:
-        for mid in self.pending_subscribe:
+        # Snapshot the pending lists before any await: a sibling task (the universe feed,
+        # calling set_markets from `_connections`' caller) can rebind self.pending_subscribe
+        # to a NEW list object while we are suspended mid-send. Reading the attribute again
+        # afterward would mark markets subscribed that this call never actually sent for.
+        to_subscribe = list(self.pending_subscribe)
+        for mid in to_subscribe:
             await self._send(ws, {"type": "subscribe", "channel": f"market_stats/{mid}"})
-        self.mark_subscribed(self.pending_subscribe)
-        for mid in self.pending_unsubscribe:
+        self.mark_subscribed(to_subscribe)
+        to_unsubscribe = list(self.pending_unsubscribe)
+        for mid in to_unsubscribe:
             await self._send(ws, {"type": "unsubscribe", "channel": f"market_stats/{mid}"})
-        self.mark_unsubscribed(self.pending_unsubscribe)
+        self.mark_unsubscribed(to_unsubscribe)
+
+    async def _wait_or_stop(self, aw, stop: asyncio.Event):
+        """Race any awaitable against `stop`. Returns (done, result_or_None): done is True iff
+        `stop` fired first, in which case the awaitable is cancelled rather than awaited out —
+        recv can be bounded by up to watchdog_s and the heartbeat sleep by up to a full
+        interval, and neither may delay shutdown by that long."""
+        work = asyncio.ensure_future(aw)
+        stop_task = asyncio.ensure_future(stop.wait())
+        done, pending = await asyncio.wait({work, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        if stop_task in done:
+            return True, None
+        return False, work
 
     async def _reader(self, ws, stop: asyncio.Event) -> None:
         while not stop.is_set() and not self.needs_reconnect:
+            stopped, work = await self._wait_or_stop(
+                asyncio.wait_for(ws.recv(), timeout=self._cfg.watchdog_s), stop)
+            if stopped:
+                continue    # loop condition re-checks stop and exits
             try:
-                raw = await asyncio.wait_for(ws.recv(), timeout=self._cfg.watchdog_s)
+                raw = work.result()
             except TimeoutError:
-                continue    # re-check stop / needs_reconnect; the timers judge silence
-            self.on_message(json.loads(raw))
+                raw = None  # watchdog: fall through to the pending-sync check below, not
+                            # past it — a `continue` here used to skip it every silent cycle
+            if raw is not None:
+                try:
+                    self.on_message(json.loads(raw))
+                except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
+                    # A malformed frame is data, not a reason to drop 214 subscriptions and
+                    # reconnect: record it and keep reading.
+                    self._write_bad_frame(raw, e)
             if self.pending_subscribe or self.pending_unsubscribe:
                 await self._sync_subscriptions(ws)   # new listings, without dropping the socket
+
+    def _write_bad_frame(self, raw, error: Exception) -> None:
+        t_ms = self._clock.now_ms()
+        text = raw if isinstance(raw, str) else repr(raw)
+        self._w.write(records.envelope(
+            FEED, VENUE, self._seq.next(), {"raw": text[:2000], "error": repr(error)},
+            t_ms=t_ms, mono_ns=self._clock.mono_ns(), trigger="bad_frame"))
 
     async def _timers(self, stop: asyncio.Event) -> None:
         """Heartbeat and forced pre-boundary snapshots. Runs whatever the socket is doing.
@@ -212,7 +290,14 @@ class LighterStateFeed:
                 wait_s, trigger = boundary_s, "boundary"
             else:
                 wait_s, trigger = float(self._cfg.lighter_heartbeat_s), "heartbeat"
-            await self._clock.sleep(max(0.0, wait_s))
-            if stop.is_set():
+            # The hour we are in when we START sleeping, not the hour after: if the sleep
+            # overshoots past HH:00:00 (clock skew, scheduling delay), the record would land
+            # in the next hour's partition while still labelled "boundary" — indistinguishable
+            # from a real one. Labelling it "boundary_late" makes the anomaly visible in data.
+            target_hour = self._clock.now_ms() // HOUR_MS
+            stopped, _ = await self._wait_or_stop(self._clock.sleep(max(0.0, wait_s)), stop)
+            if stopped:
                 return
+            if trigger == "boundary" and self._clock.now_ms() // HOUR_MS != target_hour:
+                trigger = "boundary_late"
             self.snapshot(trigger)
