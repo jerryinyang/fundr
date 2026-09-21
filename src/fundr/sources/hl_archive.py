@@ -14,7 +14,9 @@ ARCHIVE_BUCKET = "hyperliquid-archive"
 NODE_BUCKET = "hl-mainnet-node-data"
 BUDGET_USD = 0.80
 REQUEST_USD = 0.000005  # upper bound per LIST/HEAD/GET request
-EGRESS_USD_PER_GB = 0.09
+EGRESS_USD_PER_GB = 0.114  # ap-northeast-1 outbound list price (the 0.09 here before was the US
+# rate, and both buckets live in Tokyo). AWS's 100 GB/month free outbound allowance may make the
+# actual invoice $0; the guard counts list price on purpose. Corrected 2026-09-21.
 
 
 class BudgetExceeded(RuntimeError):
