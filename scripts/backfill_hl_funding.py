@@ -72,8 +72,9 @@ def main() -> None:
         total += merged.height
         print(f"[{i}/{len(coins)}] {coin}: {merged.height} hours (+{fresh.height} new) "
               f"({merged['settle_time'].min()} → {merged['settle_time'].max()})")
-    dataset.update_manifest(DATASET, {"source": SOURCE, "markets": len(coins), "rows": total,
-                                      "fetched_at_ms": int(time.time() * 1000)})
+    dataset.record_run(DATASET, {"source": SOURCE, "markets": len(coins), "rows": total,
+                                 "fetched_at_ms": int(time.time() * 1000)},
+                       partial=bool(args.coins))
     print(f"\n{DATASET}: {total} rows across {len(coins)} markets")
 
 

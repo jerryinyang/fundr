@@ -87,10 +87,11 @@ def main() -> None:
         print(f"[{i}/{len(market_list)}] {m['symbol']} ({mid}): {merged.height} hours "
               f"(+{fresh.height} new, period {period}s) "
               f"({merged['settle_time'].min()} → {merged['settle_time'].max()})")
-    dataset.update_manifest(DATASET, {"source": SOURCE, "markets": len(market_list),
-                                      "rows": total, "markets_without_history": empty,
-                                      "markets_off_hourly_period": odd_period,
-                                      "fetched_at_ms": int(time.time() * 1000)})
+    dataset.record_run(DATASET, {"source": SOURCE, "markets": len(market_list),
+                                 "rows": total, "markets_without_history": empty,
+                                 "markets_off_hourly_period": odd_period,
+                                 "fetched_at_ms": int(time.time() * 1000)},
+                       partial=bool(args.market_ids))
     print(f"\n{DATASET}: {total} rows across {len(market_list)} markets; "
           f"{len(empty)} with no history; {len(odd_period)} not on a 1h period")
     if odd_period:

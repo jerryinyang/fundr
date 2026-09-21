@@ -39,6 +39,30 @@ def test_manifest_round_trips_and_merges(tmp_path, monkeypatch):
     assert m["hl_funding"]["coverage_start_ms"] == 1  # merged, not replaced
 
 
+def test_partial_run_does_not_clobber_dataset_coverage(tmp_path, monkeypatch):
+    """A filtered run covers part of the dataset; its totals must not overwrite the whole."""
+    monkeypatch.setenv("FUNDR_PHASE2_DATA", str(tmp_path))
+    dataset.record_run("lighter_funding",
+                       {"markets": 235, "rows": 1_585_687, "fetched_at_ms": 100}, partial=False)
+    dataset.record_run("lighter_funding",
+                       {"markets": 1, "rows": 985, "fetched_at_ms": 200}, partial=True)
+    entry = dataset.manifest()["lighter_funding"]
+    assert entry["markets"] == 235
+    assert entry["rows"] == 1_585_687
+    assert entry["partial_run_at_ms"] == 200
+
+
+def test_full_run_replaces_dataset_coverage(tmp_path, monkeypatch):
+    monkeypatch.setenv("FUNDR_PHASE2_DATA", str(tmp_path))
+    dataset.record_run("hl_funding", {"markets": 2, "rows": 10, "fetched_at_ms": 1},
+                       partial=False)
+    dataset.record_run("hl_funding", {"markets": 234, "rows": 4_676_365, "fetched_at_ms": 2},
+                       partial=False)
+    entry = dataset.manifest()["hl_funding"]
+    assert entry["markets"] == 234
+    assert entry["rows"] == 4_676_365
+
+
 def test_resume_cursor_is_utc_not_local_time():
     # 2026-09-21T12:00:00Z as a NAIVE Datetime, which is how every frame in this phase stores
     # time. `Series.max().timestamp()` would apply the machine's local zone here.

@@ -113,3 +113,17 @@ def update_manifest(name: str, entry: dict) -> None:
     tmp = path.with_suffix(".json.tmp")
     tmp.write_text(json.dumps(m, indent=1, sort_keys=True))
     os.replace(tmp, path)
+
+
+def record_run(name: str, entry: dict, *, partial: bool) -> None:
+    """Record a backfill run's outcome in the manifest.
+
+    A run filtered to a few markets (`--coins`, `--market-ids`) covers only part of the
+    dataset, so writing its `markets`/`rows` totals would understate coverage to everything
+    that reads the manifest afterwards — the QA step included. A partial run therefore leaves
+    the aggregate alone and only timestamps itself.
+    """
+    if partial:
+        update_manifest(name, {"partial_run_at_ms": entry["fetched_at_ms"]})
+    else:
+        update_manifest(name, entry)
