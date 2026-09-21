@@ -2,7 +2,8 @@
 
 Date: 2026-09-20 (revised the same day after an independent review; revised again 2026-09-21 after
 a final review of the implementation plan, and amended again after deployment — see *Review
-corrections*, *Review corrections, second round* and *Review corrections, third round*)
+corrections*, *Review corrections, second round*, *Review corrections, third round* and
+*Review corrections, fourth round*)
 Parent: `docs/funding_research_design.md` (Phase 2)
 Predecessor: `docs/phase1/handoff.md` (§4 "The recorder Phase 2 must build")
 
@@ -41,7 +42,7 @@ to durable storage, with enough self-monitoring that a failure is visible rather
 
 | Topic | Decision |
 |---|---|
-| Host | AWS `t4g.micro` (1 GB) in `us-east-1`, ~$6/month. This laptop is disqualified: host suspension is the leading explanation for Phase 1's 95-minute data loss |
+| Host | AWS `t4g.micro` (1 GB), ~$6/month. This laptop is disqualified: host suspension is the leading explanation for Phase 1's 95-minute data loss. Region was `us-east-1`; **now `eu-central-1`** — Lighter geo-blocks US jurisdictions (*fourth round*) |
 | Storage | Hourly compressed files per feed on the instance, uploaded to a private S3 bucket; local copy kept 7 days |
 | Coverage | All markets on both venues (~234 HL, ~246 Lighter), not just the research universe |
 | Trades | Not recorded (see Scope) |
@@ -202,6 +203,9 @@ dies without taking the others down.
 - `t4g.micro` (1 GB), 8 GB gp3, `us-east-1`. 512 MB was rejected: ~246 Lighter markets at roughly
   190 messages/second plus gzip leaves too little headroom. Region is the cheap one; the earlier
   "close to the venues" rationale was an untested inference and irrelevant at a 60-second cadence.
+  *(Region superseded: the recorder runs in `eu-central-1`, because Lighter refuses websocket
+  connections from US jurisdictions and the cheap region is therefore unusable. See
+  [Review corrections, fourth round](#review-corrections-fourth-round).)*
 - **No inbound ports.** Shell via AWS Session Manager. *(Not what was deployed — the account
   denies all IAM, so there is no instance role and therefore no Session Manager. See
   [Review corrections, third round](#review-corrections-third-round).)*
@@ -394,3 +398,49 @@ administrator does this on the user's behalf):
 
 Until step 4 lands, the spec's "no inbound ports" line and its instance-role line describe the
 intended end state, not the deployed one.
+
+## Review corrections, fourth round
+
+The recorder was deployed to `us-east-1` and recorded Hyperliquid correctly, but **Lighter's edge
+refused every websocket handshake from the instance**, returning `HTTP/1.1 400 Bad Request` with
+`{"code": 20558, "message": "You are accessing Lighter from a restricted jurisdiction..."}`. The
+same handshake succeeded from the operator's laptop, so the refusal is by client-IP jurisdiction,
+not a bug in the recorder. `lighter_state` coverage sat at `0.0` with an open gap and a steady
+reconnect count — correct recorder behaviour, but no Lighter data at all, which is the feed the
+whole design exists to capture (*Lighter capture rule*, above).
+
+Whether to run the recorder from a different jurisdiction is a **terms-of-service judgement about
+Lighter's jurisdiction restrictions, not an engineering one.** It was put to the user in those
+terms, and **the user made the call** to relocate. That decision is recorded here as the user's,
+not the implementer's.
+
+**The recorder therefore runs in `eu-central-1` (Frankfurt).** A probe from that region returned
+`WS=ACCEPTED HTTP/1.1 101 Switching Protocols`, and the deployed instance confirms it: 1,135
+`lighter_state` records in the first hour, every one with `n_msgs > 0`, zero `ws_error` records
+and zero gaps. Nothing else about the design changed — same instance type, same volume, same
+single-SSH-source security group, still no instance profile, `FUNDR_BUCKET` still empty. **No
+proxy, VPN or traffic-masking software is installed**; the move is a plain relocation of where the
+instance runs.
+
+**Cost of the deviation:** Frankfurt is dearer than N. Virginia. `t4g.micro` is $0.0092/hr against
+$0.0084 and gp3 is $0.0952/GB-month against $0.08, so the monthly total moves from ~$10.52 to
+~$11.23 — about $0.71/month for a feed that was otherwise unobtainable. `deploy/aws_provision.py`
+carries a per-region rate table so `plan` prints the right number.
+
+**The us-east-1 partial recording is preserved.** Before the old instance was terminated its
+`/var/lib/fundr` was copied to
+`s3://fundr-recorder-801242831140-us-east-1/recorder/us-east-1-partial/` — ~2.6 hours of
+Hyperliquid and universe data (plus the geo-blocked Lighter gap records, kept as the evidence of
+the block). It is a separate prefix from `recorder/v1/`, carries a different instance id in every
+filename and record, and must not be concatenated with the Frankfurt recording without accounting
+for the ~5-minute cutover gap between them.
+
+**What did not change:** the two third-round deviations still stand. The account still denies IAM,
+so the Frankfurt instance still has no instance profile, still no Session Manager, still SSH from
+one /32 (with a new per-region key pair, `fundr-recorder-eu`, private key at
+`auth/fundr-recorder-eu.pem`, gitignored, mode 0600), and `FUNDR_BUCKET` is still empty — the
+recording still lives only on the instance's EBS volume. The revert procedure above applies
+unchanged, except that the bucket
+(`fundr-recorder-801242831140-us-east-1`) is in `us-east-1` while the instance is in
+`eu-central-1`; that is fine for S3 (cross-region access is a data-transfer charge, not a
+permission problem) and adds roughly $0.02/GB egress to the upload cost once uploads are enabled.

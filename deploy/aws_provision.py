@@ -19,6 +19,13 @@ attaching a role later -- see the runbook.
 The script refuses to touch anything it did not create: every resource is tagged
 ``Project=fundr,Component=recorder`` and an existing resource that lacks those
 tags is reported as a conflict rather than adopted or modified.
+
+Region: ``AWS_REGION``, defaulting to ``eu-central-1``.  The recorder was moved
+out of ``us-east-1`` because Lighter's edge refuses websocket handshakes from US
+jurisdictions -- the user's call, recorded in the spec's *Review corrections,
+fourth round*.  ``find_instance`` matches on tags within one region only, so
+running this against the wrong region would report "nothing exists" and cheerfully
+launch a duplicate; keep the default pointed at where the recorder actually runs.
 """
 
 from __future__ import annotations
@@ -35,10 +42,18 @@ from pathlib import Path
 import boto3
 from botocore.exceptions import ClientError
 
-REGION = os.environ.get("AWS_REGION", "us-east-1")
+# The recorder lives in eu-central-1 because Lighter refuses websocket connections from US
+# jurisdictions -- see the runbook's "Why Frankfurt" and the spec's fourth-round deviation.
+# This default is deliberate: a bare ``apply`` must not quietly provision a SECOND instance
+# back in us-east-1, which would both cost money and record no Lighter data.
+REGION = os.environ.get("AWS_REGION", "eu-central-1")
 
-KEY_NAME = "fundr-recorder"
-KEY_PATH = Path("/Users/jerryinyang/Trading/fundr/auth/fundr-recorder.pem")
+# EC2 key pairs do not cross regions, so each region needs its own; the name therefore tracks
+# the region by default, and both it and the local private-key path stay overridable.
+DEFAULT_KEY_NAMES = {"eu-central-1": "fundr-recorder-eu", "us-east-1": "fundr-recorder"}
+AUTH_DIR = Path(os.environ.get("FUNDR_AUTH_DIR", "/Users/jerryinyang/Trading/fundr/auth"))
+KEY_NAME = os.environ.get("FUNDR_KEY_NAME") or DEFAULT_KEY_NAMES.get(REGION, f"fundr-recorder-{REGION}")
+KEY_PATH = Path(os.environ.get("FUNDR_KEY_PATH", str(AUTH_DIR / f"{KEY_NAME}.pem")))
 SG_NAME = "fundr-recorder-sg"
 # EC2 rejects apostrophes in group descriptions (allowed set is a-zA-Z0-9. _-:/()#,@[]+=&;{}!$*).
 SG_DESCRIPTION = "fundr recorder: SSH from the operator IP only, all egress"
@@ -53,15 +68,25 @@ BUCKET = "fundr-recorder-801242831140-us-east-1"
 TAGS = {"Project": "fundr", "Component": "recorder"}
 TAG_LIST = [{"Key": k, "Value": v} for k, v in TAGS.items()]
 
-# Monthly cost, us-east-1 on-demand, 730 hours.  Sources: EC2 t4g.micro
-# $0.0084/hr, public IPv4 $0.005/hr, gp3 $0.08/GB-month.
-COSTS = [
-    (f"{INSTANCE_TYPE} on-demand, 730 h x $0.0084", 6.13),
-    ("public IPv4 address, 730 h x $0.005", 3.65),
-    (f"{VOLUME_GB} GB {VOLUME_TYPE} root volume x $0.08/GB", 0.64),
-    ("S3 storage + requests (bucket exists; uploads disabled)", 0.10),
-    ("key pair, security group", 0.00),
-]
+# Monthly cost at 730 hours, on-demand.  Per-region because t4g and gp3 both cost more in
+# Frankfurt than in N. Virginia; the public IPv4 charge ($0.005/hr) is the same everywhere.
+# Rates: t4g.micro $/hr, gp3 $/GB-month.
+REGION_RATES = {
+    "us-east-1": (0.0084, 0.08),
+    "eu-central-1": (0.0092, 0.0952),
+}
+
+
+def costs(region: str) -> list[tuple[str, float]]:
+    """Monthly cost lines for ``region``, falling back to us-east-1 rates if unknown."""
+    hourly, gb_month = REGION_RATES.get(region, REGION_RATES["us-east-1"])
+    return [
+        (f"{INSTANCE_TYPE} on-demand, 730 h x ${hourly}", round(hourly * 730, 2)),
+        ("public IPv4 address, 730 h x $0.005", 3.65),
+        (f"{VOLUME_GB} GB {VOLUME_TYPE} root volume x ${gb_month}/GB", round(gb_month * VOLUME_GB, 2)),
+        ("S3 storage + requests (bucket is us-east-1; uploads disabled)", 0.10),
+        ("key pair, security group", 0.00),
+    ]
 
 
 def tagged(resource_tags: list[dict] | None) -> bool:
@@ -228,11 +253,12 @@ def print_plan(p: Plan) -> None:
         for line in p.conflicts:
             print(f"  {line}")
     print()
-    print("monthly cost:")
-    for label, amount in COSTS:
+    lines = costs(p.region)
+    print(f"monthly cost ({p.region}):")
+    for label, amount in lines:
         print(f"  ${amount:5.2f}  {label}")
     print(f"  ------")
-    print(f"  ${sum(a for _, a in COSTS):5.2f}  total per month")
+    print(f"  ${sum(a for _, a in lines):5.2f}  total per month")
 
 
 def do_apply(ec2, ssm, s3, cidr: str) -> Plan:
