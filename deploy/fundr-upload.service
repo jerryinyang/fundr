@@ -1,0 +1,10 @@
+[Unit]
+Description=fundr recorder S3 upload
+
+[Service]
+Type=oneshot
+User=fundr
+WorkingDirectory=/opt/fundr
+Environment=FUNDR_RECORDER_DATA=/var/lib/fundr
+EnvironmentFile=/etc/fundr/recorder.env
+ExecStart=/opt/fundr/.venv/bin/python -m fundr.recorder.upload
