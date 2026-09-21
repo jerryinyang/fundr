@@ -1,7 +1,5 @@
 import asyncio
 
-import pytest
-
 from fundr.recorder.config import Clock, Config
 from fundr.recorder.feeds.hl_state import HLStateFeed
 from fundr.recorder.health import Health

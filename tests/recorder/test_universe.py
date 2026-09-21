@@ -26,11 +26,56 @@ class FakeLighter:
                  "funding_clamp_big": "4.0000", "base_interest_rate": "0.0100"}]
 
 
-def _feed(tmp_path, on_markets=None):
+class FailingHL:
+    """meta() either hangs (to trip the watchdog) or raises, depending on construction."""
+    def __init__(self, hang: bool = False, fail: bool = False):
+        self.hang, self.fail = hang, fail
+
+    async def meta(self):
+        if self.fail:
+            raise RuntimeError("boom")
+        if self.hang:
+            await asyncio.sleep(3600)
+        return {"universe": [{"name": "BTC"}]}
+
+
+class FailingDetailsLighter(FakeLighter):
+    async def order_book_details(self):
+        raise RuntimeError("details boom")
+
+
+class FailingLighter:
+    """Both Lighter calls either hang or raise."""
+    def __init__(self, hang: bool = False, fail: bool = False):
+        self.hang, self.fail = hang, fail
+
+    async def order_books(self):
+        if self.fail:
+            raise RuntimeError("books boom")
+        if self.hang:
+            await asyncio.sleep(3600)
+        return []
+
+    async def order_book_details(self):
+        if self.fail:
+            raise RuntimeError("details boom")
+        if self.hang:
+            await asyncio.sleep(3600)
+        return []
+
+
+def _rows(tmp_path):
+    out = []
+    for p in sorted((tmp_path / "universe").rglob("*.jsonl.gz")):
+        out += [json.loads(x) for x in gzip.open(p, "rt").read().splitlines()]
+    return out
+
+
+def _feed(tmp_path, on_markets=None, hl=None, lighter=None, cfg=None):
     clock = Clock(now_ms=lambda: HOUR * 100, mono_ns=lambda: 0, sleep=asyncio.sleep)
     w = HourlyWriter(tmp_path, "universe")
-    feed = UniverseFeed(Config(root=tmp_path), w, Health(clock), clock,
-                        FakeHL(), FakeLighter(), on_markets)
+    feed = UniverseFeed(cfg or Config(root=tmp_path), w, Health(clock), clock,
+                        hl or FakeHL(), lighter or FakeLighter(), on_markets)
     return feed, w
 
 
@@ -71,3 +116,54 @@ async def test_coverage_expectations_come_from_the_venue_market_lists(tmp_path):
     assert set(feeds["lighter_state"]["markets"]) == {"BTC"}     # DEAD is inactive
     assert feeds["lighter_state"]["markets"]["BTC"]["expected_hour"] == 60
     assert feeds["lighter_state"]["markets"]["BTC"]["received_window"] == 0
+
+
+async def test_details_failure_still_writes_hl_and_books_partial(tmp_path):
+    seen = []
+    feed, w = _feed(tmp_path, on_markets=seen.append, lighter=FailingDetailsLighter())
+    ids = await feed.cycle()
+    w.close()
+    rows = _rows(tmp_path)
+    envelopes = [r for r in rows if r.get("type") != "gap"]
+    assert len(envelopes) == 1
+    pay = envelopes[0]["payload"]
+    assert [m["name"] for m in pay["hl_universe"]] == ["BTC", "OLD"]
+    assert {b["symbol"] for b in pay["lighter_order_books"]} == {"BTC", "DEAD"}
+    assert pay["lighter_details"] is None
+    assert envelopes[0]["partial"] is True
+    gaps = [r for r in rows if r.get("type") == "gap"]
+    assert [g["reason"] for g in gaps] == ["lighter_details_error"]
+    assert ids == [1]
+    assert seen == [[1]]
+
+
+async def test_hl_meta_timeout_still_publishes_lighter_markets(tmp_path):
+    seen = []
+    cfg = Config(root=tmp_path, watchdog_s=1)
+    feed, w = _feed(tmp_path, on_markets=seen.append, hl=FailingHL(hang=True), cfg=cfg)
+    ids = await asyncio.wait_for(feed.cycle(), timeout=5)
+    w.close()
+    rows = _rows(tmp_path)
+    gaps = [r for r in rows if r.get("type") == "gap"]
+    assert any(g["reason"] == "hl_meta_timeout" for g in gaps)
+    envelopes = [r for r in rows if r.get("type") != "gap"]
+    assert len(envelopes) == 1
+    pay = envelopes[0]["payload"]
+    assert pay["hl_universe"] is None
+    assert {b["symbol"] for b in pay["lighter_order_books"]} == {"BTC", "DEAD"}
+    assert envelopes[0]["partial"] is True
+    assert ids == [1]
+    assert seen == [[1]]
+
+
+async def test_total_failure_returns_empty_list_and_writes_three_gaps(tmp_path):
+    feed, w = _feed(tmp_path, hl=FailingHL(fail=True), lighter=FailingLighter(fail=True))
+    ids = await feed.cycle()
+    w.close()
+    rows = _rows(tmp_path)
+    envelopes = [r for r in rows if r.get("type") != "gap"]
+    gaps = [r for r in rows if r.get("type") == "gap"]
+    assert envelopes == []
+    assert ids == []
+    assert {g["reason"] for g in gaps} == {"hl_meta_error", "lighter_books_error",
+                                            "lighter_details_error"}
