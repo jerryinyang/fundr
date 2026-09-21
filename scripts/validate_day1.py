@@ -18,8 +18,10 @@ late-enough LAST reading does (P7, "coverage filters").
 import argparse
 import gzip
 import json
+import time
 from pathlib import Path
 
+import httpx
 import polars as pl
 
 from fundr.analysis import attach_settled, epoch_ms, match_stats, reported_tolerance
@@ -38,6 +40,22 @@ MAX_LAG_S = 120  # P7's coverage filter: only a late-enough LAST reading invalid
 MIN_N = 5        # plausible record count for a market-hour that was actually observed
 BASELINE_ABS = 1.5e-5  # HL's per-hour interest floor is +-0.0000125; a few zero-interest
                        # markets settle at 0.0 -- both are "baseline" (see validate_hl below)
+
+
+def _hl_funding_history_with_backoff(api: HLInfo, coin: str, start_ms: int, end_ms: int) -> list[dict]:
+    """A day-one check queries every complete-hour coin sequentially against HL's public
+    endpoint (no API key), which is rate-limited (429) well before ~200 coins finish. Back off
+    and retry rather than let one throttled coin abort the whole verdict."""
+    delay = 1.0
+    for attempt in range(6):
+        try:
+            return api.funding_history(coin, start_ms, end_ms)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 429 or attempt == 5:
+                raise
+            time.sleep(delay)
+            delay = min(delay * 2, 20.0)
+    return []  # unreachable; loop always returns or raises
 
 
 def _read_gz(path: Path) -> list[str]:
@@ -142,8 +160,8 @@ def validate_hl(root: Path) -> tuple[dict | None, bool]:
     # real problem in the off-baseline population.
     coins = hl_last["coin"].unique().to_list()
     hl_settled = funding_history_frame(
-        [r for c in coins for r in api.funding_history(c, int(hl["t_ms"].min()) - 3_600_000,
-                                                       int(hl["t_ms"].max()) + 7_200_000)])
+        [r for c in coins for r in _hl_funding_history_with_backoff(
+            api, c, int(hl["t_ms"].min()) - 3_600_000, int(hl["t_ms"].max()) + 7_200_000)])
     htol = reported_tolerance(hl_settled["funding_rate_str"].to_list())
     hj = attach_settled(hl_last,
                         hl_settled.select("coin", "settle_time",
