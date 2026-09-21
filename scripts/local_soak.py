@@ -6,6 +6,7 @@ import asyncio
 import gzip
 import json
 import resource
+import sys
 import tempfile
 from collections import Counter
 from pathlib import Path
@@ -31,6 +32,9 @@ async def main() -> int:
     cfg = Config(root=root)
     clock = Clock()
     health = Health(clock)
+    health.set_cadence("hl_state", cfg.hl_poll_s)
+    health.set_cadence("lighter_state", cfg.lighter_heartbeat_s)
+    health.set_cadence("universe", cfg.universe_s)
     writers = {n: HourlyWriter(root, n) for n in ("hl_state", "lighter_state", "universe")}
     # One client per task, exactly as __main__ does it: the soak must exercise production's
     # isolation, not a shared pool that production does not have.
@@ -68,7 +72,11 @@ async def main() -> int:
                 if r["feed"] == "lighter_state" and r.get("trigger") == "heartbeat" \
                         and r.get("n_msgs") == 0:
                     zero_msgs += 1
-    peak_mb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024 * 1024)
+    # ru_maxrss is bytes on macOS (Darwin) but KILOBYTES on Linux -- the actual deploy
+    # target. Dividing bytes unconditionally by 1024**2 under-reports Linux memory by ~1000x,
+    # which matters here because the 1 GB instance sizing decision reads this number.
+    raw_maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    peak_mb = raw_maxrss / (1024 * 1024) if sys.platform == "darwin" else raw_maxrss / 1024
     health_body = json.loads((root / "health.json").read_text())
 
     reasons = Counter(g["reason"] for g in gaps)
@@ -84,7 +92,8 @@ async def main() -> int:
     print("triggers:", dict(triggers))
     print("gap records:", len(gaps), dict(reasons))
     print("lighter heartbeats with zero messages:", zero_msgs)
-    print(f"peak RSS: {peak_mb:.0f} MB")
+    print(f"peak RSS: {peak_mb:.0f} MB (from ru_maxrss={raw_maxrss}, "
+          f"{'bytes' if sys.platform == 'darwin' else 'KB'} on {sys.platform})")
     print("health status:", health_body["status"])
 
     ok = (rows["hl_state"] > 0 and rows["lighter_state"] > 0 and rows["universe"] > 0

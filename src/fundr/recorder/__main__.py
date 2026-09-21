@@ -16,6 +16,9 @@ async def _run() -> None:
     cfg = Config.from_env()
     clock = Clock()
     health = Health(clock)
+    health.set_cadence("hl_state", cfg.hl_poll_s)
+    health.set_cadence("lighter_state", cfg.lighter_heartbeat_s)
+    health.set_cadence("universe", cfg.universe_s)
     writers = {n: HourlyWriter(cfg.root, n) for n in ("hl_state", "lighter_state", "universe")}
     # One client per task, never shared: a shared connection pool is a shared queue, and a
     # stalled universe sweep sitting on it would block the HL poll — the coupling the spec's

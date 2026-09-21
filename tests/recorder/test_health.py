@@ -121,6 +121,48 @@ def test_expect_markets_replaces_the_active_set():
     assert set(h.snapshot(START)["feeds"]["lighter_state"]["markets"]) == {"BTC", "SOL"}
 
 
+def test_registered_cadence_feed_not_stale_at_its_own_period():
+    """universe writes once every 300 s by design; a flat 300 s stale threshold would call
+    it broken by construction, between every single sweep. Registering its cadence must
+    give it headroom: not stale 301 s after its last write."""
+    h, state = _health()
+    h.expect("universe", "sweep", 12)
+    h.set_cadence("universe", 300)
+    h.record("universe", "sweep", state["wall"])
+    state["wall"] += 301_000
+    assert h.status(state["wall"]) == "ok"
+
+
+def test_registered_cadence_feed_broken_after_three_missed_cycles():
+    h, state = _health()
+    h.expect("universe", "sweep", 12)
+    h.set_cadence("universe", 300)
+    h.record("universe", "sweep", state["wall"])
+    state["wall"] += 3 * 300_000 + 1_000   # just past 3x cadence
+    assert h.status(state["wall"]) == "broken"
+
+
+def test_registered_cadence_feed_still_floors_at_five_minutes():
+    """A 60 s-cadence feed's 3x-cadence threshold (180 s) is below the 300 s floor, so it
+    must still go broken at the existing 300 s default, not sooner. `n=1` keeps coverage
+    below MIN_JUDGEABLE for this short a window, so only staleness is under test."""
+    h, state = _health()
+    h.expect("hl_state", "BTC", 1)
+    h.set_cadence("hl_state", 60)
+    h.record("hl_state", "BTC", state["wall"])
+    state["wall"] += 200_000               # past 3x cadence (180 s) but under the 300 s floor
+    assert h.status(state["wall"]) == "ok"
+    state["wall"] += 101_000               # now past the 300 s floor
+    assert h.status(state["wall"]) == "broken"
+
+
+def test_unregistered_feed_keeps_the_flat_five_minute_default():
+    h, state = _health()
+    _minutely(h, state, "hl_state", {"BTC": 30}, 30)
+    state["wall"] += 6 * MIN
+    assert h.status(state["wall"]) == "broken"
+
+
 def test_snapshot_written_atomically(tmp_path: Path):
     h, state = _health()
     h.expect("hl_state", "BTC", 60)

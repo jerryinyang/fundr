@@ -40,6 +40,22 @@ class Health:
         self._last_write: dict[str, int] = {}
         self._last_event_ms: dict[str, int] = {}
         self._open_gap: dict[str, int] = {}
+        self._cadence_ms: dict[str, float] = {}
+
+    def set_cadence(self, feed: str, seconds: float) -> None:
+        """Register how often `feed` is expected to write, in seconds. A flat staleness
+        threshold cannot serve every feed: universe writes once every 300 s by design, so a
+        global 300 s stale threshold marks it "broken" between every single sweep, by
+        construction, not because anything is wrong. Each registered feed's own stale
+        threshold becomes `max(STALE_WRITE_MS, 3 * cadence)` — three missed cycles, not zero
+        margin against one. Feeds that never register a cadence keep today's flat default."""
+        self._cadence_ms[feed] = seconds * 1000
+
+    def _stale_threshold_ms(self, feed: str) -> float:
+        cadence = self._cadence_ms.get(feed)
+        if cadence is None:
+            return STALE_WRITE_MS
+        return max(STALE_WRITE_MS, 3 * cadence)
 
     # --- the single time source -------------------------------------------
     def _advance(self, now_ms: int | None = None) -> int:
@@ -126,11 +142,12 @@ class Health:
         now = self._advance(now_ms)
         coverages = self._coverages(now)
         gaps = [now - t for t in self._open_gap.values()]
-        stale = [now - t for t in self._last_write.values()]
+        stale = [(now - t) > self._stale_threshold_ms(feed)
+                 for feed, t in self._last_write.items()]
         for dq in self._reconnects.values():
             self._trim(dq, now)
         if (coverages and min(coverages) < BROKEN_COVERAGE) or \
-           any(g > DEGRADED_GAP_MS for g in gaps) or any(s > STALE_WRITE_MS for s in stale):
+           any(g > DEGRADED_GAP_MS for g in gaps) or any(stale):
             return "broken"
         if (coverages and min(coverages) < OK_COVERAGE) or gaps or \
            any(len(dq) >= OK_MAX_RECONNECTS for dq in self._reconnects.values()):
