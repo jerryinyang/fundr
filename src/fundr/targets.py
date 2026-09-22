@@ -20,8 +20,19 @@ Lighter's is `signed_rate / 100`. `assert_common_basis` tests the values, not th
 or over a hole, is legitimate data with fewer hours in it. Nothing here imputes a missing forward
 hour and nothing here drops a row for having a short window -- the count travels with the row and
 Phase 6 decides what to do with it.
+
+**The same rule governs the two flags.** `add_venue_flags` tags the hours where the spread is
+venue arithmetic rather than a market (`joint_baseline`) and the hours where Lighter's outer
+clamp bound (`venue_clamped`). Neither ever deletes a row: dropping the clamp hours would fit a
+model on a sample conditioned on the event never happening. What the flags are *for* is
+`skill_metric_rows` and `tuning_rows`, which are the only two places a flagged row is allowed to
+disappear.
 """
 import polars as pl
+
+# The venue's own four-decimals-of-percent truncation, imported rather than re-implemented so
+# that Lighter's rounding rule has exactly one definition in this repo.
+from fundr.funding.lighter_formula import _trunc4
 
 #: Largest magnitude a per-hour signed funding fraction can plausibly take. Hyperliquid's outer
 #: clamp is 0.04/hour and Lighter's 0.005/hour; the largest magnitude observed over 978,572
@@ -48,6 +59,22 @@ MIN_SIGN_SYMBOLS = 20
 #: appear. `rate` and `signed_rate` are Lighter's native percent columns; they are checked rather
 #: than banned, because Phase 4's own target frames also call a column `rate`.
 BASIS_COLUMNS = ("rate", "signed_rate", "signed_rate_fraction", "funding_rate", "spread")
+
+#: Hyperliquid's settled rate wherever its inner clamp cancels the premium exactly -- the bare
+#: interest-rate component, 0.01% per 8 hours. Venue-wide: Hyperliquid publishes no per-market
+#: interest rate. The rate sits here on 59.86% of concurrent pair-hours, strictly below it on
+#: 34.00% and negative on 23.98%, so it is a plateau, not a floor.
+HL_BASELINE = 1.25e-5
+
+#: Absolute tolerance for "this rate *is* that parameter". Both sides are float arithmetic over
+#: the same decimals and they do not land on the same bits: `trunc4(0.01 / 8) / 100` is
+#: 1.2000000000000002e-05 where the venue's own `0.0012 / 100` is 1.1999999999999999e-05, so `==`
+#: finds none of the 445,795 rows it should. Six orders of magnitude below the 1e-6 fraction
+#: lattice Lighter reports on, so it can never merge two distinct published values.
+RATE_TOLERANCE = 1e-12
+
+#: The flags `add_venue_flags` emits. Both are reported, neither deletes a row.
+FLAG_COLUMNS = ("joint_baseline", "venue_clamped")
 
 
 def non_adjacent_pairs(df: pl.DataFrame, *, on: str = "hour",
@@ -178,3 +205,118 @@ def assert_common_basis(df: pl.DataFrame) -> None:
             raise ValueError(
                 f"{column!r} has no negative value across {df.height} rows of a cross-section: "
                 "funding is signed, so the sign was dropped -- use `signed_rate`, not `rate`")
+
+
+# --- the two flags: emitted, reported separately, never used to delete a row -----------------
+
+def _sits_at(rate: pl.Expr, parameter: pl.Expr | float) -> pl.Expr:
+    """Is this rate the value that parameter produces, up to `RATE_TOLERANCE`?"""
+    return (rate - parameter).abs() <= RATE_TOLERANCE
+
+
+def lighter_baseline(base_interest_rate_pct: pl.Expr) -> pl.Expr:
+    """Lighter's settled rate at baseline, per market, as a per-hour signed fraction.
+
+    The venue divides the market's annual-style base rate by 8 and truncates to four decimal
+    places **of percent**, which is where the whole `joint_baseline` artifact comes from: 0.01%
+    becomes `0.00125%`, truncates *down* to `0.0012%`, and lands 5.0e-7 below Hyperliquid's
+    untruncated `1.25e-5`.
+
+    **Takes the market's own parameter, never BTC's.** `base_interest_rate_pct` is 0.0100 on 119
+    Lighter markets, 0.0032 on 89 and **0.0000 on 27** -- and a base rate of 0 puts the baseline
+    at exactly 0, which is the only way the second joint-baseline spread value, `1.25e-5`, can
+    arise. Within the 100 matched pairs only AI16Z, MKR, LAUNCHCOIN and YZY carry it."""
+    return _trunc4(base_interest_rate_pct / 8) / 100
+
+
+def lighter_clamp(funding_clamp_big_pct: pl.Expr) -> pl.Expr:
+    """The largest magnitude a market's settled rate can take, as a per-hour signed fraction.
+
+    Lighter applies its outer clamp *before* the division by 8, so the ceiling on the settled
+    rate is `funding_clamp_big_pct / 8`, truncated as any rate is. It is 4.0% on 227 markets --
+    every one of the 100 matched pairs, ceiling **5.0e-3** -- but 16.0 on RIVER, 20.0 on ARC,
+    0.02 on five Korean equities and 0.0 on MKR.
+
+    **Seven markets breach their published ceiling and none of them is a matched pair**: the five
+    Korean equities plus HANMI observe rates up to 0.5%/h against a published 0.0025%/h, and MKR
+    reaches 0.0636%/h against a published clamp of 0. Those parameters are wrong or differently
+    scaled -- consistent with the multiplier-50 equity/RWA finding in `docs/phase4/decisions.md`
+    -- so a later phase applying this to Target A's Lighter per-venue view cannot trust the
+    parameter there. On Target B it is exact: the observed maximum on the matched panel is
+    5.0000e-03 to five figures."""
+    return _trunc4(funding_clamp_big_pct / 8) / 100
+
+
+def add_venue_flags(df: pl.DataFrame, *, hl_rate: str = "hl_rate",
+                    lighter_rate: str = "lighter_rate",
+                    lighter_base_rate_pct: str = "lighter_base_rate_pct",
+                    lighter_clamp_big_pct: str = "lighter_clamp_big_pct") -> pl.DataFrame:
+    """Add `joint_baseline` and `venue_clamped`. Returns every input row, unchanged and in order.
+
+    **This function cannot drop a row and nothing downstream may use these flags to drop one from
+    the dataset.** The only sanctioned exclusions are `skill_metric_rows` and `tuning_rows`; call
+    those at the point a metric is computed, not at the point the data is written.
+
+    `joint_baseline` -- both venues sitting at their own baseline, **45.57% of concurrent
+    pair-hours (445,904)**. The spread there takes exactly **two** values: `+5.0e-7` where
+    Lighter's base rate is 0.01% (445,795 rows, the truncation of `0.00125%` to `0.0012%`) and
+    `1.25e-5` where it is 0 (109 rows). That is a rounding rule, not a market, and a model scored
+    on those hours is being graded on arithmetic. Excluding them un-masks the sign of everything
+    else: mean spread is **-6.23e-8** overall and **-5.36e-7** without them. Reported separately
+    they are a zero-turnover known-sign carry of **0.44%/year** -- the floor any model must beat.
+
+    `venue_clamped` -- Lighter's outer clamp binding, **142 hours across 23 symbols and 42
+    distinct days**. Mean |spread| there is 2.847e-3 = **28.5 bp/h, 149x the overall mean**, but
+    the 142 hours are only **2.2% of all gross spread**: a risk and capacity question, not a
+    revenue one. A market whose published clamp is not positive flags nothing -- MKR reports 0.0
+    for every funding parameter while its own history reaches 6.36e-4, so believing that zero
+    would flag all 4,463 of its hours as clamped.
+
+    The two Lighter parameters are taken as **columns**, per market, because a scalar would be
+    BTC's: the base rate alone takes three values across the venue and a flag calibrated on the
+    matched set is wrong outside it. A null in either raises rather than silently flagging False,
+    which is what an unjoined market would otherwise produce."""
+    missing = [c for c in (hl_rate, lighter_rate, lighter_base_rate_pct, lighter_clamp_big_pct)
+               if c not in df.columns]
+    if missing:
+        raise ValueError(f"cannot flag without {missing}: the flags need both venues' rates and "
+                         f"each market's own Lighter parameters; {df.columns} carries neither a "
+                         "spread's ingredients nor a substitute for them")
+    for column in (lighter_base_rate_pct, lighter_clamp_big_pct):
+        nulls = df[column].null_count()
+        if nulls:
+            raise ValueError(f"{column!r} is null on {nulls} of {df.height} rows -- a market "
+                             "whose parameters did not join would flag False rather than raise; "
+                             "join the Lighter market snapshot before flagging")
+    ceiling = lighter_clamp(pl.col(lighter_clamp_big_pct))
+    return df.with_columns(
+        (_sits_at(pl.col(hl_rate), HL_BASELINE)
+         & _sits_at(pl.col(lighter_rate),
+                    lighter_baseline(pl.col(lighter_base_rate_pct)))).alias("joint_baseline"),
+        ((ceiling > 0) & _sits_at(pl.col(lighter_rate).abs(), ceiling)).alias("venue_clamped"))
+
+
+def _without(df: pl.DataFrame, flags: tuple[str, ...], purpose: str) -> pl.DataFrame:
+    absent = [f for f in FLAG_COLUMNS if f not in df.columns]
+    if absent:
+        raise ValueError(f"{purpose} may not run on a frame missing {absent}: call "
+                         "`add_venue_flags` first, rather than scoring the artifact hours")
+    return df.filter(~pl.any_horizontal(pl.col(f) for f in flags))
+
+
+def skill_metric_rows(df: pl.DataFrame) -> pl.DataFrame:
+    """The rows a Phase 6-8 **skill metric** may be computed on: `joint_baseline` excluded.
+
+    Decision D3. The clamp hours stay in -- they are real market, just a rare one -- and are
+    reported separately. The excluded hours are reported separately too, as the 0.44%/year carry
+    they are; they are not deleted from the dataset by this or anything else."""
+    return _without(df, ("joint_baseline",), "a skill metric")
+
+
+def tuning_rows(df: pl.DataFrame) -> pl.DataFrame:
+    """The rows **hyperparameter selection** may see: both flags excluded.
+
+    Decisions D3 and D4. A squared-error fit let near the 142 clamp hours would bend the whole
+    model to chase a mean |spread| 149x its own, for 2.2% of the gross. They are still fitted on,
+    still scored on, and still reported -- just not tuned on."""
+    return _without(df, FLAG_COLUMNS, "hyperparameter selection")
