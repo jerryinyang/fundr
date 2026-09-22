@@ -135,6 +135,24 @@ after listing and after each other, not because bars inside the series are missi
 per-market gap counts for the widely-covered majors like BTC/ETH are 20 gaps over ~14,700 hours,
 i.e. spread thin, not clustered).
 
+> ### ⚠️ Corrected 2026-09-22 — bars inside the series ARE missing
+>
+> The claim above that the low candle coverage is "not because bars inside the series are
+> missing" is **wrong**, as is the "spread thin, not clustered" characterisation of BTC/ETH's 20
+> gaps. Measured: **every** gap is a clustered block of ~200 hours (BTC's 20 gaps are each
+> exactly 200h; 971 of 1,657 trade-candle gaps and 1,620 of 1,708 mark-candle gaps are exactly
+> 200h). Totals: **297,185 missing trade bars** across 176 of 218 markets and **337,412 missing
+> mark bars** across 209 of 226 markets.
+>
+> The cause is a paging bug in `scripts/backfill_lighter_candles.py` — `WINDOW_S = 700 * 3600`
+> against an endpoint returning ~500 rows, with `t = upper` advancing the full window anyway.
+> See the corrected block under `lighter_candles` in `datasets.md`.
+>
+> **RESOLVED 2026-09-22.** Fixed and re-collected via `--refetch`: both series now have **zero
+> internal gaps** (1,616,821 trade bars, +330,556; 1,389,772 mark bars, +374,290), and the trade
+> series begins 2025-01-17 08:00 rather than 2025-01-25. The candle coverage medians quoted
+> elsewhere in this document predate the re-collection and understate it.
+
 ### Mark-price candles start later than trade candles — confirmed, and worse than the one
 ### example measured while planning
 
