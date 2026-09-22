@@ -99,3 +99,89 @@ Only the recent 2026 days are genuine candidates for arriving more complete late
 - Missing minutes are always a tail of the day. Use each day's last observed minute as the
   session end rather than assuming 23:59.
 - De-duplicate on `(time, coin)`; a small number of coin-days carry up to 1,447 rows.
+
+## Task 8 QA: coverage, gaps, alignment and vendor cross-check
+
+Run with `uv run python scripts/qa_backfill.py` on 2026-09-22. Full per-market tables (worst-ten,
+cross-venue pairs, day-by-day archive completeness) are in the uncommitted report at
+`data/phase2/qa/coverage_report.md` — this section is the summary of what it found.
+
+### Coverage per dataset, measured against each market's own listing (not the data's own span)
+
+| Dataset | Markets | Rows | Median coverage | Markets with gaps | Short at head | Short at tail |
+|---|---|---|---|---|---|---|
+| HL funding | 234 | 4,676,365 h | 0.9985 | 141 | 213 | 234 |
+| Lighter funding | 235 | 1,585,687 h | 0.9982 | 0 | 0 | 214 |
+| Lighter trade candles | 218 | 1,286,265 bars | 0.7995 | 176 | 191 | 197 |
+| Lighter mark-price candles | 226 | 1,015,482 bars | 0.7215 | 209 | 222 | 214 |
+
+"Short at tail" for every dataset is dominated by markets that are simply still trading — the
+tail anchor is "now" for `active` markets, so a market a few hours behind the last complete hour
+at run time reads as tail-short even though nothing is actually missing. The mark/trade-candle
+median coverage (0.72–0.80) looks worse than funding because both series measure against the
+market's *listing*, and — see below — the two price series routinely start weeks to months
+after listing and after each other, not because bars inside the series are missing (the
+per-market gap counts for the widely-covered majors like BTC/ETH are 20 gaps over ~14,700 hours,
+i.e. spread thin, not clustered).
+
+### Mark-price candles start later than trade candles — confirmed, and worse than the one
+### example measured while planning
+
+165 of 218 markets with both series start their mark-price and trade-candle history on
+different days. ETH/BTC/SOL/TAO and 9 others all show a **5,087-hour (212-day)** gap: trade
+candles from 2025-01-25 16:00Z, mark candles from 2025-08-25 15:00Z. This is larger than the
+8-day gap measured on market 138 (AMD) during planning — that gap is real, but it is the small
+end of the range, not representative. Any Phase 7 feature that joins trade and mark candles
+directly is silently missing up to 212 days of history on 165 of 218 markets unless it treats
+the two series' starts independently.
+
+### Cross-venue symbol matching (Phase 1's `kPEPE` vs `1000PEPE` problem, sized)
+
+- Matched on symbol: **100**. Hyperliquid-only: **134**. Lighter-only: **135**.
+- This is *not* a measure of assets missing from one venue — the mismatch is dominated by
+  denomination prefixes (`kPEPE`/`1000PEPE`) and venue-specific listings (equities, FX and
+  commodities exist only on Lighter; older/smaller alts only on HL). Phase 3 owns the alias
+  table; this run is the size of the problem it needs to solve — 134 + 135 = 269 unmatched
+  symbol-instances out of 469 total, well over half.
+
+### Settlement alignment — Hyperliquid's stamp convention re-tested
+
+| lag (h) | pairs | mean corr | median corr |
+|---|---|---|---|
+| -1 | 99 | 0.4402 | 0.3846 |
+| **0** | **99** | **0.5528** | **0.5368** |
+| +1 | 99 | 0.4522 | 0.4041 |
+
+**Verdict: ALIGNED.** Lag 0 has the strongest correlation of the three tested (median 0.537 vs.
+0.384 and 0.404 at ±1h), confirming Phase 1's inference that HL's row stamped `T` closes the
+hour ending at `T`. Target B and every downstream cross-venue spread rest on this holding, and
+it does. (100 symbols matched; the lag scan ran on 99 of them — one pair's series was too short
+or degenerate to correlate.)
+
+### Survivorship check
+
+`hl_asset_ctxs` coin roster (234 coins) vs. today's live `meta.universe` from `HLInfo` (234
+coins): **`archive_only` is empty, `meta_only` is empty.** HL has not dropped any delisted
+coin from `meta` as of 2026-09-22 — a `meta`-built universe currently loses nothing. This is a
+point-in-time result, not a permanent guarantee; re-check if `meta` behavior changes.
+
+### Independent vendor cross-check — not run
+
+`vendor_crosscheck` (0xArchive) is implemented and unit-tested (`FakeOX`, all assertions pass),
+but the live cross-check against BTC/ENA (handoff §8 action 6) could **not** be executed in this
+environment: no `OXARCHIVE_API_KEY` is set, and none is present in the repo's `.env` (checked;
+this worktree does not even have a `.env` file). This is an environment gap, not a code defect —
+re-run `uv run python scripts/qa_backfill.py --vendor-symbols BTC ENA` once a key is available.
+
+### What a later phase must handle
+
+- Phase 7: features joining Lighter trade and mark candles must not assume a shared start —
+  165 of 218 markets disagree, by up to 212 days.
+- Phase 3: the alias table for cross-venue symbol matching covers 269 unmatched symbol-instances
+  (134 HL-only, 135 Lighter-only) out of 469.
+- Phase 3/7: HL funding coverage is 213/234 markets short at the head, 1–24h each (median 13h).
+  This is expected noise from the day-granularity listing proxy (the brief allows up to 23h);
+  9 coins (AAVE, CFX, COMP, FTM, GMX, SNX, XRP, kBONK, kFLOKI) sit exactly at 24h — right at the
+  boundary, not materially longer than a day, but worth a second look if a future run pushes any
+  of them further.
+- Vendor cross-check remains unexecuted; run it once `OXARCHIVE_API_KEY` exists.
