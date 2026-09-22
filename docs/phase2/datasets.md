@@ -86,11 +86,39 @@ refuses to start if that does not match `dataset.root()`. The other four scripts
   candles below (`scripts/backfill_lighter_candles.py`), paged at 700-hour windows, tolerating
   up to 24 consecutive empty windows (~2 years) before giving up on a market — a quiet first
   window does not mean the market never traded.
-- **Coverage**: 218 of 235 markets have any history at all (17 have none — see below); 1,286,265
-  rows from 2025-01-25 16:00. Median coverage against listing is only **0.7995**, but this
+- **Coverage**: 218 of 235 markets have any history at all (17 have none — see below); **1,616,821
+  rows from 2025-01-17 08:00** (re-collected 2026-09-22 after the paging fix; was 1,286,265 rows
+  from 2025-01-25 16:00). Median coverage against listing is only **0.7995**, but this
   understates quality: per `backfill_coverage.md`, BTC/ETH have 20 gaps over ~14,700 hours
   (spread thin, not clustered) — the low median is a listing-vs-history-depth artifact (see next
   bullet), not missing bars inside the series.
+
+  > ### ⚠️ WRONG — corrected 2026-09-22. There ARE missing bars inside the series, and it is a bug.
+  >
+  > "Spread thin, not clustered" and "not missing bars inside the series" are both false. The gap
+  > *count* is right; the structure is not. **Every gap is a clustered 200-hour block.** BTC's 20
+  > gaps are each **exactly 200 hours**. Across the dataset: **297,185 missing trade bars in 1,657
+  > gaps across 176 of 218 markets** (971 gaps of exactly 200h), and **337,412 missing mark bars in
+  > 1,708 gaps across 209 of 226 markets** (1,620 of exactly 200h).
+  >
+  > **Cause — a live paging bug in `scripts/backfill_lighter_candles.py`.** `WINDOW_S = 700 * 3600`
+  > requests a 700-hour window with `count_back=700`, but the endpoint returns ~500 rows. The loop
+  > then does `t = upper` (line 90), advancing the **full window** regardless of how many rows came
+  > back, so ~200 hours are skipped on every page and never revisited. The fix is to advance from
+  > the **last bar actually returned** rather than from the window edge. Re-collection is free
+  > (unauthenticated, unbilled) — this is not venue downtime and not a listing artifact.
+  >
+  > **RESOLVED 2026-09-22 — bug fixed and data re-collected.** `--refetch` re-paged all 235
+  > markets (~2h45m, free). Result: `lighter_candles` **1,616,821 rows (+330,556)** and
+  > `lighter_mark_candles` **1,389,772 rows (+374,290)**, with **zero internal gaps in either**
+  > (was 297,185 and 337,412 missing bars in 3,365 gaps). The trade series now begins
+  > **2025-01-17 08:00**, not 2025-01-25 — the paging bug was truncating the head as well as the
+  > middle, so the "Lighter history starts eight days after its funding" caveat is retired.
+  >
+  > **Consequence for Phase 3, re-measured:** Lighter-unrankable pair-hours fell from **242,460
+  > (24.78%) to 2,323 (0.24%)**, so the Lighter size leg is now *better* covered than the
+  > Hyperliquid one (17,156, 1.75%). The staleness guard in the Phase 3 plan stays — it is cheap
+  > and it is what would have caught this — but it is no longer load-bearing.
 - **Known gaps**:
   - **17 markets have no trade-candle history at all**: GME, TTWO, QNT, BE, USDHKD, BYD,
     POPMART, ARM, AAOI, NOK, QCOM, AVGO, SOXS, WDC, AXTI, KIOXIA, KORU (`manifest.json`
@@ -197,6 +225,14 @@ refuses to start if that does not match `dataset.root()`. The other four scripts
 
 - **What it is**: a dated snapshot of every HL and Lighter market, including the per-market
   funding parameters (multiplier, base interest rate, clamps) and fees.
+
+  > **Corrected 2026-09-22: "and fees" is wrong for Hyperliquid and unreliable for Lighter.**
+  > The HL partition has **no fee column at all** (`coin`, `is_delisted`, `sz_decimals`,
+  > `max_leverage`, `margin_table_id`, `margin_mode`, `only_isolated`). Lighter carries
+  > `maker_fee`/`taker_fee`, but both read **0.0 on all 235 markets**, which is far more likely
+  > an unpopulated field than a zero-fee venue. **No cost model should be built on either**
+  > until someone checks Lighter's published schedule against a real fill. This matters because
+  > round-turn cost is the number Phase 3's universe verdict turns on.
 - **Source**: HL `metaAndAssetCtxs` (`markets_hl`) and Lighter `/api/v1/orderBooks` +
   `/api/v1/orderBookDetails` (`markets_lighter`), both free, unauthenticated,
   `scripts/snapshot_markets.py`. Seconds to run.
@@ -228,6 +264,13 @@ refuses to start if that does not match `dataset.root()`. The other four scripts
    (`kPEPE`/`1000PEPE`) and venue-exclusive listings (equities/FX/commodities on Lighter only;
    older/smaller alts on HL only). Phase 3 owns the alias table; this backfill only sizes the
    problem.
+
+   > **Corrected 2026-09-22.** "Dominated by denomination prefixes" is wrong and has been
+   > propagated from here into `handoff.md`. Measured: exactly **5** recoverable denomination
+   > pairs exist (`kBONK`/`kFLOKI`/`kPEPE`/`kSHIB` ↔ `1000*`, `NOT` ↔ `1000NOT`), worth +60,951
+   > concurrent pair-hours. The remaining 259 unmatched symbols are **genuine venue exclusives**,
+   > and all 6 candidates from fuzzy matching at 0.8 similarity are false positives. The
+   > mismatch is dominated by venue-exclusive listings alone.
 
 2. **HL's `day_ntl_vlm` is daily-cumulative, not per-bucket.** It resets at UTC midnight and
    must be **differenced with a midnight reset** to get hourly volume — a plain diff across a
@@ -272,6 +315,13 @@ refuses to start if that does not match `dataset.root()`. The other four scripts
    delisting timestamps (no field exists anywhere; only the recorder's own per-cycle universe
    snapshot will ever produce one), and an exact-to-settlement HL running funding series (HL's
    archived `funding` never equals settlement off-baseline — see `hl_asset_ctxs` above).
+
+   **This is what stops Phase 3 ranking both venues the same way**, and it is resolved, not
+   open: Phase 3 builds **two universes**, each venue ranked by the size measure it actually
+   has — HL by real open interest from `hl_asset_ctxs`, Lighter by trailing quote volume from
+   `lighter_candles` — and Target B uses only the intersection of the two. The proxy is
+   acceptable because the rule excludes the top 10; it does not need to rank precisely. Full
+   reasoning and the measured consequences are in [`handoff.md`](handoff.md) §2.
 
 7. **Historical trades / aggregated flow were not collected — Scope decision 1.** HL's
    `node_fills_by_block` (continued back by `node_fills`) is a usable whole-network historical
