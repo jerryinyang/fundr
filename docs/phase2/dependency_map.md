@@ -19,13 +19,14 @@ prerequisite would idle Phases 2b–10 for weeks against data that is already fr
 
 | Phase | What it needs | Where it comes from |
 |---|---|---|
-| **2b — historical collection** | Settled hourly funding, both venues | HL `fundingHistory` (free, from each market's listing); Lighter `/api/v1/fundings` `1h` (free, no auth, 13,000–14,600 h per sample market, zero gaps > 1 h) |
-| **3 — universe** | Point-in-time market size | HL `asset_ctxs` open interest, one row per coin per minute, 2023-05-20 → present; listings datable from per-date coin presence and Lighter `created_at` |
-| **4 — Targets A and B** | Settled funding on both venues, aligned | As Phase 2b; both venues settle hourly on the hour with explicit timestamps, so time-since/until-settlement is exact for every historical row |
+| **2b — historical collection** | Settled hourly funding, both venues | ✅ **Collected** (2026-09-22): `hl_funding` (234 markets, 4,676,365 rows, from 2023-05-12) and `lighter_funding` (235 markets, 1,585,687 rows, from 2025-01-17) — see `docs/phase2/datasets.md` |
+| **2b — market metadata** | Per-market funding parameters, listing status, fees, both venues | ✅ **Collected** (snapshot 2026-09-21): `markets` (HL 234 markets / 56 delisted, Lighter 235 perp markets / 214 active) — see `docs/phase2/datasets.md` |
+| **3 — universe** | Point-in-time market size | ✅ **Collected**: `hl_asset_ctxs` (HL `asset_ctxs` open interest, one row per coin per minute, 1,218 days, 2023-05-20 → 2026-09-19, 275,320,095 rows); listings datable from per-date coin presence and Lighter `created_at` in `markets` |
+| **4 — Targets A and B** | Settled funding on both venues, aligned | ✅ Same as 2b above — `hl_funding` and `lighter_funding`, joined on `signed_rate_fraction`; both venues settle hourly on the hour with explicit timestamps, so time-since/until-settlement is exact for every historical row. Alignment re-tested this run (lag-0 verdict: ALIGNED) |
 | **5 — exploratory analysis** | Targets A and B | Phase 4's output |
 | **6 — baselines** | Targets A and B | Phase 4's output |
 | **8 — single-venue vs cross-venue** | Targets A and B | Phase 4's output |
-| **9 — trading simulation** | Targets, prices, fees | Phase 4's output plus venue price history and published fees |
+| **9 — trading simulation** | Targets, prices, fees | Phase 4's output plus venue price history (`lighter_candles`/`lighter_mark_candles`, `hl_asset_ctxs`) and published fees (`markets`) |
 | **10 — robustness** | Everything above | Phases 4–9 |
 
 ## Needs the recorder
@@ -44,7 +45,7 @@ served, and this shapes what features are honest to use:
 |---|---|---|
 | Open interest | Per minute from 2023-05-20, complete | **None native.** 0xArchive only, from 2025-08-25, 84.2–97.4% complete, paid tier |
 | Premium | Per minute from 2023-05-20 | **None, anywhere.** Recorder only |
-| Index price (for basis) | `oracle_px` per minute from 2023-05-20 — the venue's own funding input | Live only. 0xArchive carries `index_price`, schema verified but **never validated as a price series** |
+| Index price (for basis) | `oracle_px` per minute from 2023-05-20 — the venue's own funding input | Live only. 0xArchive carries `index_price` from 2025-08-25, schema verified but **never validated as a price series** — until it is, treat this as **recorder-only** alongside premium and trade flow below |
 | Perp price, volume | Per minute from 2023-05-20 | `/api/v1/candles`, ≥ 1 year at 1 h, ≥ 180 days at 1 m |
 | Signed trade flow | `node_fills` + `node_fills_by_block`, 2025-05-25 → present, ~$27/year | **No usable historical source**; vendor fills finalize 16.7–36 h late |
 
