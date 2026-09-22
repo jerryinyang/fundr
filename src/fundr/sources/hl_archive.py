@@ -25,7 +25,10 @@ from fundr.store import data_root, probe_dir
 
 ARCHIVE_BUCKET = "hyperliquid-archive"
 NODE_BUCKET = "hl-mainnet-node-data"
-BUDGET_USD = 0.80
+# Raised 2026-09-22 for the Phase 2b `asset_ctxs` backfill, measured at $0.922 (1,218 files,
+# 10.109 GB at $0.09/GB plus $0.012 of requests). $1.20 covers that pull plus roughly 300
+# quarantine re-fetches and still stops a runaway well short of a surprise.
+BUDGET_USD = 1.20
 REQUEST_USD = 0.000005  # upper bound per LIST/HEAD/GET request
 # Outbound list price per bucket, by the bucket's own region (see the module docstring). AWS's
 # 100 GB/month free outbound allowance may make the actual invoice $0; the guard counts list
