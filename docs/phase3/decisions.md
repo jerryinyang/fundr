@@ -259,12 +259,79 @@ objection raised against the exclusion rule.
 
 | # | Deferred | Trigger to reopen |
 |---|---|---|
-| F1 | **Where the size threshold actually belongs — if anywhere.** Phase 3 ships rank columns, not a gate. The threshold is not set. | The forecastability-by-size-decile measurement (Task 5 of the plan). If there is a break, the threshold goes where the break is, and it will not be at 10. If it is flat, the gate was cosmetic and never gets built. |
+| F1 | **Where the size threshold actually belongs — if anywhere.** ~~Phase 3 ships rank columns, not a gate. The threshold is not set.~~ **ANSWERED 2026-09-22 — nowhere. See "F1 — ANSWERED" below.** | ~~The forecastability-by-size-decile measurement (Task 5 of the plan).~~ Measured: no break at rank 10 (gap 0.108 ± 0.086 clustered, t = 1.25), and no threshold anywhere whose gap survives the knob grid. **Reopens** only if a later phase measures a size effect on a target other than spread persistence, or if a cost model shows a decile where net-of-cost carry is positive. |
 | F2 | **Whether the Lighter volume proxy is any good on Lighter.** Unanswerable today. | Lighter's `open_interest` is in the live recorder's persisted payload (`src/fundr/recorder/feeds/lighter_state.py`) and Phase 1's live probe saw the field. **Nobody has looked at a live record** — treat as unverified until someone does. Once 30–60 days have accrued, rank Lighter both ways over the same window and measure. |
 | F3 | **Whether the early narrow window is a different liquidity tier.** Kept in, flagged, not down-weighted. | A measured cost model. If quoted spreads in the narrow era differ materially from 2026, add the weight. |
 | F4 | **The unbalanced panel.** ~9,786 hours per symbol against ~14,640 in the window — a third of the grid is absent because symbols list on different dates, tilting the sample toward long-listed majors. Single-reviewer finding, unmeasured. | Before any pooled cross-sectional result is reported. Measure per-symbol hour counts and funding statistics by days-since-listing. |
 | F5 | **The 24-hour archive re-run** (`handoff.md` §5.1). Billed, ~$0.13, budget $1.20. Not blocking. | Whenever someone wants the ten in-window short days resolved. It changes a caveat (17,156 unrankable pair-hours, 1.8%), not a target. |
 | F6 | **Buying 0xArchive Build.** | Only if F2 shows the volume proxy is badly wrong *and* the vendor's Lighter open interest from 2025-08-25 validates against the recorder over an overlapping window. Both conditions, in that order. |
+
+---
+
+## F1 — ANSWERED 2026-09-22. The size exclusion does not belong in this research.
+
+Measured by `scripts/universe_diagnostics.py` over the 1,039,313 usable cross-venue pair-hours
+in `panel/view=cross_venue`, 14,700 distinct hours. Full tables and every caveat in
+`data/phase2/qa/universe_diagnostics.md`. **All standard errors are clustered on the hour**;
+the textbook error is ~32× smaller, which is the size of the significance independence would
+have invented.
+
+**1. There is no break at rank 10, and no stable break anywhere.** Hour-to-hour persistence of
+the funding spread (`ac1 level`) by point-in-time open-interest decile — **D10 is the largest**,
+matching the cost table below:
+
+| | D1 | D2 | D3 | D4 | D5 | D6 | D7 | D8 | D9 | D10 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ac1 level | 0.696 | **0.784** | 0.597 | 0.618 | 0.651 | 0.539 | **0.788** | 0.617 | 0.712 | **0.509** |
+| clustered se | 0.052 | 0.105 | 0.053 | 0.064 | 0.083 | 0.077 | 0.089 | 0.055 | 0.059 | 0.084 |
+
+Strongest D7, weakest D10, **spread 0.279** — non-monotone, with no size gradient. At the
+design's own threshold the kept cohort is more persistent than the excluded one by
+**0.108 ± 0.086 (t = 1.25)**. Nine thresholds from 3 to 50 were tried; the largest is rank ≤ 5
+at t = 2.68, which is the best of nine and does not survive that.
+
+**2. The four knobs move the answer more than size does.** Across the 24-cell grid (pool ×
+rebalance × start × Lighter leg) the same headline ranges from **−0.060 to +0.231 — dispersion
+0.291, larger than the whole 0.279 spread across the deciles.** The Lighter leg is the swing
+factor: gating on it flips the sign under a daily rebalance. A "finding" this sensitive to a
+knob nobody argued about is not a finding.
+
+**3. The excluded cohort is the cheapest and the best hedged.** Both gradients are monotone in
+size, and both run against the rule:
+
+| | D1 | D5 | D9 | D10 |
+|---|---|---|---|---|
+| round-turn cost (bp) | 37.9 | 31.4 | 27.1 | **24.3** |
+| 24h basis drift sd (bp) | 91.2 | 23.2 | 37.9 | **18.5** |
+| 24h carry (bp) | 6.21 | 3.71 | 2.92 | 2.16 |
+| **net 24h (bp)** | **−31.7** | **−27.7** | **−24.2** | **−22.1** |
+
+By pair age the same shape, harder: week 1 drifts **246 bp** over a 24-hour hold against 17.7 bp
+after three months. Excluding each market's first month costs 7.2% of panel rows.
+
+**4. Net of cost and basis, nothing in this panel is tradeable at a 24-hour hold — no decile,
+no age bucket.** Measured gross carry is **1.03 bp at 6h, 3.70 at 24h, 9.78 at 72h** across
+every hold. The round turn is 24–38 bp. The hedge moves further than the carry on **76–87% of
+holds in every decile**. The recorded 6.21 / 31.33 bp figures above are reproduced only when
+entry is restricted to hours whose spread is already in the widest decile (measured 4.25 bp at
+6h, 27.5 bp at 72h) — they are a selective-entry number, not an unconditional one, and even
+that does not clear the cheapest decile's round turn.
+
+**So: no size gate, at any threshold.** Nothing downstream filters on size. The rank columns
+stay, because H2 still wants open interest as a *predictor* and because cost and basis risk are
+strongly size-ordered even though forecastability is not.
+
+**Was Phase 3's un-gated override earned? The conclusion is; the sequencing was not.** Shipping
+a column rather than a gate is the right call and this measurement now supports it. But it was
+made *before* the measurement existed, and it would have been made the same way had a break
+appeared at rank 10. The binding rule — the gated panel as the reporting default until F1
+answered — was the correct safeguard and it is **now lifted**, on evidence.
+
+**One obligation replaces it.** The top-10 cohort is not neutral: it is ~13.6% of rows, it is
+less persistent, and it is materially cheaper and better hedged than everything else. **Every
+headline result in Phases 5–8 must be reported split on `in_hl_top10`**, not because the rule
+is right, but because the two cohorts differ on cost and basis by 1.5–5×, and a pooled number
+hides which side of that it came from.
 
 ---
 
@@ -332,6 +399,28 @@ at or below 6 bp; the cheapest is 11.2 bp.**
 Per-symbol spread of the total across 88 matched non-top-10 names: p10 16.0, p25 21.4, median
 33.0, p75 63.8, p90 100.7 bp. The floor across *all* matched names is 9.2 bp (BTC), set almost
 entirely by Hyperliquid's fee.
+
+> ### ⚠️ The carry figures this section compares against are SELECTIVE-ENTRY, corrected 2026-09-22
+>
+> The 6.21 bp at 6h and 31.33 bp at 72h quoted above and throughout Phase 3/4 are **not**
+> unconditional carry. Measured across *every* hold on the 1,039,523-pair-hour panel, and
+> reproduced independently by the orchestrating session to two decimals:
+>
+> | horizon | unconditional mean \|carry\| | widest-decile entry |
+> |---|---|---|
+> | 6h | **1.03 bp** | 3.94 bp |
+> | 24h | **3.70 bp** | 11.57 bp |
+> | 72h | **9.79 bp** | 25.26 bp |
+>
+> The recorded figures are only reachable by restricting entry to hours whose spread is already
+> among the widest — a **selective-entry, in-sample, no-forecasting** number that was presented
+> as the carry the strategy earns. **This makes the cost comparison far worse, not marginally
+> worse:** against a ~33 bp round turn, unconditional 6-hour carry is short by a factor of ~32,
+> not ~5. Even perfect widest-decile selection does not clear the *cheapest* decile's 24.3 bp
+> round turn until 72 hours, and then only barely.
+>
+> Every downstream use of 6.21/31.33 must state that it is conditional on selection, or use the
+> unconditional figures above.
 
 **Two things this changes.**
 
