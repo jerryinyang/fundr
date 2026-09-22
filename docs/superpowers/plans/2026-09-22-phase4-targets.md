@@ -95,10 +95,10 @@ Task 1 (adjacency-safe joins and the unit assertions) first — everything else 
 
 **Why this task is first.** Two silent corruptions live here and neither would ever surface as an error. (a) Hyperliquid's grid has 1,789 eight-hour intervals and 213 single-hour holes; a `shift`-based lag pairs rates 2 or 8 hours apart on 2,002 occasions and the result just looks like noise. (b) Lighter's raw `rate` is an unsigned percent; used as-is it is 100× too large and sign-free, and a spread built on it would be dominated by a units bug.
 
-- [ ] **Step 1: write the failing tests.** Feed a fixture with a deliberate 2-hour hole and assert the row spanning it is dropped or flagged, never silently paired. Feed a fixture with an 8-hour gap and assert the same. Assert `assert_common_basis` raises on a frame carrying Lighter's raw `rate`. Assert `n_hours_used < h` at a series' tail.
-- [ ] **Step 2: run, expect failure.**
-- [ ] **Step 3: implement**, then re-run.
-- [ ] **Verify:** over the real Hyperliquid history the join reports exactly **2,002** non-adjacent pairs (1,789 eight-hour plus 213 single-hour holes). If it reports zero, the join is silently bridging them.
+- [x] **Step 1: write the failing tests.** Feed a fixture with a deliberate 2-hour hole and assert the row spanning it is dropped or flagged, never silently paired. Feed a fixture with an 8-hour gap and assert the same. Assert `assert_common_basis` raises on a frame carrying Lighter's raw `rate`. Assert `n_hours_used < h` at a series' tail.
+- [x] **Step 2: run, expect failure.**
+- [x] **Step 3: implement**, then re-run. 16 tests in `tests/test_targets.py`; suite 250 → 266, all green.
+- [x] **Verify:** over the real Hyperliquid history the join reports exactly **2,002** non-adjacent pairs (1,789 eight-hour plus 213 single-hour holes). If it reports zero, the join is silently bridging them. **Measured: 2,002 — 1,789 at 8h and 213 at 2h across 141 of 234 markets.** `forward_window(h=1)` independently leaves those same 2,002 rows with `n_hours_used = 0` rather than pairing them, beside 234 legitimate series tails. Lighter: 0 non-adjacent pairs in 1,585,452 intervals.
 
 ### Task 2: The premium pathway, including Lighter's historical premium
 
@@ -110,14 +110,47 @@ Task 1 (adjacency-safe joins and the unit assertions) first — everything else 
   - **off baseline** → `P = 8·rate + clamp_small` above baseline, `P = 8·rate − clamp_small` below, in percent, with the market's own `funding_clamp_small_pct` and `base_interest_rate_pct` (**never BTC's** — the parameters are per market: multiplier 100/50/1 on 137/96/2 markets, base rate 0.0100/0.0032/0.0000 on 119/89/27).
   - **at baseline** → `lo`/`hi` bounding the dead zone, `premium_is_point_identified = False`.
 
-**This is the phase's new capability and it contradicts a Phase 1 finding.** `docs/phase1/handoff.md` §2 records that no historical Lighter premium exists anywhere. That is true of the intra-hour path but false of the hour's average: the published formula inverts cleanly on **36.46%** of hours, with **zero** band violations across 337,905 checked rows and a **0.845** correlation with Hyperliquid's premium. On the rest the premium is interval-bounded, which is censored data, not missing data.
-
-**The one thing to confirm before anything consumes it** (`decisions.md` F6): the inversion assumes the formula runs on signed premium, while Lighter reports an unsigned `rate` with a separate `direction` field. Zero band violations is strong but indirect evidence. Check it against the live recorder's own `premium` field over an overlapping hour.
+> ### ⚠️ Corrected 2026-09-22 — this is NOT new information, and F6 is already settled
+>
+> This section previously called the inversion "the phase's new capability" that "contradicts a
+> Phase 1 finding", citing zero band violations on 337,905 rows and a 0.845 correlation with
+> Hyperliquid's premium. **The formula below is correct and should be implemented as written.
+> The framing was wrong on three counts:**
+>
+> 1. **It recovers no information.** `P = 8·rate ± clamp_small` is a *strictly monotone transform*
+>    of `signed_rate_fraction`, a column already on disk. Spearman against Hyperliquid's premium
+>    is **identical to four decimals (0.6233)** for the inverted premium and for the raw rate, and
+>    the raw rate's Pearson is **higher** (0.8575 vs 0.8450). A monotone map cannot change rank
+>    order. **`docs/phase1/handoff.md` §2 stands** — it claims no *independent* historical premium
+>    observation exists, and re-deriving one from the rate through the venue's own formula is not
+>    an independent observation.
+> 2. **The "zero band violations" evidence is a tautology.** Branch selection is
+>    `rate > baseline` vs `rate < baseline`; the band condition reduces to exactly that same
+>    inequality. It cannot fail on any data. Do not cite it, and do not write a test that asserts
+>    it as though it were evidence.
+> 3. **F6 is DONE — do not re-run it, and do not wait on the recorder.** It was settled on
+>    2026-09-22 via Lighter's *public* websocket (`market_stats`), which serves `premium`,
+>    `current_funding_rate`, `base_interest_rate` and both clamps in one message. Scored forward
+>    against the venue's own published rate over 234 markets: `clamp_small = 0.05` as the
+>    **half-band** (what `lighter_formula.py` ships, and what this task's formula uses) gives
+>    100/136 exact on crypto and **10/13 in the disputed band**; the rival 0.025 reading gives
+>    89/136 and **0/13**. The shipped reading is right for all 100 matched pairs. See the
+>    "F6 RUN AND SETTLED" box in `docs/phase4/decisions.md`.
+>
+> **What the inversion is still good for:** expressing the rate on the premium's scale, which may
+> be the more natural regressor and makes the dead-zone structure explicit. Implement it, and
+> document it as a **link function / reparameterisation**, never as recovered data.
+>
+> **One real finding, and it matters for Target A only.** The multiplier-50 equity/RWA markets fit
+> the *halved* bound better (MAE 0.00022 against 0.00065), consistent with the effective clamp
+> scaling with `funding_premium_multiplier`. No matched pair is multiplier-50, so **Target B is
+> untouched** — but Target A's Lighter per-venue view spans **96** such markets. Do not apply the
+> crypto-calibrated bound there; use each market's own scaled clamp and assert it.
 
 - [ ] **Step 1: write the failing tests.** Round-trip: take Phase 1's confirmed formula, feed a known premium, settle it, invert it, and assert the premium comes back within the truncation width (~8e-4 percent). Assert a market with `base_interest_rate_pct = 0.0032` inverts with its own parameters, not BTC's. Assert a baseline hour returns an interval and `premium_is_point_identified = False`. Assert every point estimate falls **outside** the market's dead-zone band.
 - [ ] **Step 2: run, expect failure.**
 - [ ] **Step 3: implement**, then re-run.
-- [ ] **Verify:** on the real data, **356,800** off-baseline hours invert, **zero** band violations on the 337,905 rows with the 0.01% base rate, and correlation with Hyperliquid's premium is **0.845**. Then do the F6 confirmation against the recorder and record the result in `docs/phase4/decisions.md`.
+- [ ] **Verify:** on the real data, **356,800** off-baseline hours invert and the correlation with Hyperliquid's premium is **0.845**. **Do not verify "zero band violations"** — that check is a tautology and has been withdrawn. **Do not re-run F6** — it is settled (see the box above). Instead assert the redundancy explicitly: Spearman of the inverted premium against Hyperliquid's premium equals that of the raw `signed_rate_fraction` to four decimals, so a reader cannot later mistake the column for new data.
 
 ### Task 3: The targets
 

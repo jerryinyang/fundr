@@ -410,7 +410,12 @@ entirely by Hyperliquid's fee.
 > |---|---|---|
 > | 6h | **1.03 bp** | 3.94 bp |
 > | 24h | **3.70 bp** | 11.57 bp |
-> | 72h | **9.79 bp** | 25.26 bp |
+> | 72h | **9.78 bp** | 25.26 bp |
+>
+> The selective-entry column is **entry restricted to the widest decile of spreads that hour**.
+> `universe_diagnostics.md` §6 reports a slightly different selective figure (4.25 / 12.61 /
+> 27.45 bp) under a *different* selection rule. Both are correct for their own rule; neither is
+> unconditional. Always name the selection rule when quoting a selective number.
 >
 > The recorded figures are only reachable by restricting entry to hours whose spread is already
 > among the widest — a **selective-entry, in-sample, no-forecasting** number that was presented

@@ -157,16 +157,27 @@ Every number in `handoff.md` §3 is conditional on exact-symbol matching and cha
 
 > ### ⚠️ The size rule and basis risk pull in opposite directions — measured 2026-09-22
 >
-> Phase 4's D6 re-measurement, verified independently by the orchestrating session over 804,800
-> 24-hour holds, finds basis drift concentrated in **young** markets:
+> Basis drift is concentrated in **young** markets. **Figures corrected 2026-09-22 — use
+> `data/phase2/qa/universe_diagnostics.md` §5, not the earlier numbers.**
 >
-> | Pair age | 24h basis drift sd | Share of holds exceeding the 18.91 bp carry |
+> | Pair age | 24h basis drift sd | Share of holds exceeding the carry |
 > |---|---|---|
-> | Week 1 | **124.4 bp** | 29.9% |
-> | Weeks 2–4 | 60.5 bp | 21.9% |
-> | Months 1–3 | 27.8 bp | 23.1% |
-> | 3 months+ | 17.2 bp | 15.8% |
+> | Week 1 | **246 bp** | 29.9% |
+> | Weeks 2–4 | 131 bp | 21.9% |
+> | Months 1–3 | 30.5 bp | 23.1% |
+> | 3 months+ | 17.7 bp | 15.8% |
 > | **BTC / ETH / SOL** | **9.9 bp** | **5.0%** |
+>
+> > **Why the earlier young-bucket figures (124.4 / 60.5 / 27.8) were too low, and whose error it
+> > was.** They came from the orchestrating session's own check, which measured a pair's age from
+> > its first hour in the *mark-joined* panel. Lighter's mark candles begin 2025-08-25, so every
+> > pair already trading on that date was relabelled "age 0". Measured: **49% of that week-1
+> > bucket were pairs at least a month old**, which diluted the young cohort with mature markets
+> > and biased the figure down by roughly half. The old and giant buckets were barely affected
+> > and match to a rounding. Age must run from the pair's **first concurrent funding hour**
+> > (2025-01-17 onward), which is what `panel.pair_age_hours` carries and what the diagnostics
+> > use. The mark-convention explanation offered for this gap is not the cause — both
+> > measurements already used Hyperliquid's end-of-hour mark.
 >
 > The five names the top-10 rule always excludes are the **safest** in the panel on this measure,
 > and the rule's effect is to tilt the universe toward small, new listings — precisely the cohort

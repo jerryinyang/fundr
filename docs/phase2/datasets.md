@@ -44,6 +44,15 @@ refuses to start if that does not match `dataset.root()`. The other four scripts
   tail anchor is the last complete hour, not because rows are missing.
 - **Known gaps**: none inside the series once past the head — HL funding is a complete,
   gap-free hourly grid to each market's listing (Phase 1, confirmed again by Task 8's gap scan).
+
+  > **Corrected 2026-09-22 (Phase 3).** "Complete, gap-free hourly grid" is true **inside the
+  > Lighter window** and false over the full history. Measured across 4,676,131 intervals:
+  > **1,789 eight-hour intervals** (HL funding settled 8-hourly until 2023-06-08) and **213
+  > single-hour holes across 141 of 234 markets**. All of it predates 2025-01-17, so Target B is
+  > untouched — but Target A's per-venue view runs on this history, and a one-row `shift` would
+  > silently pair rates 2 or 8 hours apart on 2,002 occasions. **Build every lag as an explicit
+  > hour difference and join on it**, never with `shift`. Lighter's history has **zero**
+  > irregular intervals in 1,585,452. See `docs/phase3/decisions.md` D6.
 - **Columns**: `coin`, `time` (raw settlement stamp), `settle_time` (`time` truncated to the
   hour), `funding_rate` (HL's native signed fraction per hour, tolerance `1e-10`),
   `funding_rate_str` (the reported string, for exact-string checks), `premium`,
