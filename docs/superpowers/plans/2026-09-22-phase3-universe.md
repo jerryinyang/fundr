@@ -162,22 +162,33 @@ Every number in `handoff.md` §3 is conditional on exact-symbol matching and cha
 >
 > | Pair age | 24h basis drift sd | Share of holds exceeding the carry |
 > |---|---|---|
-> | Week 1 | **246 bp** | 29.9% |
-> | Weeks 2–4 | 131 bp | 21.9% |
-> | Months 1–3 | 30.5 bp | 23.1% |
-> | 3 months+ | 17.7 bp | 15.8% |
+> | Week 1 | **80–200 bp — a range, not a point** | 34–55% |
+> | Weeks 2–4 | 56–131 bp | 21.9–34.4% |
+> | Months 1–3 | **30.5 bp** | 23.1–24.4% |
+> | 3 months+ | **17.7 bp** | 15.8–16.0% |
 > | **BTC / ETH / SOL** | **9.9 bp** | **5.0%** |
 >
-> > **Why the earlier young-bucket figures (124.4 / 60.5 / 27.8) were too low, and whose error it
-> > was.** They came from the orchestrating session's own check, which measured a pair's age from
-> > its first hour in the *mark-joined* panel. Lighter's mark candles begin 2025-08-25, so every
-> > pair already trading on that date was relabelled "age 0". Measured: **49% of that week-1
-> > bucket were pairs at least a month old**, which diluted the young cohort with mature markets
-> > and biased the figure down by roughly half. The old and giant buckets were barely affected
-> > and match to a rounding. Age must run from the pair's **first concurrent funding hour**
-> > (2025-01-17 onward), which is what `panel.pair_age_hours` carries and what the diagnostics
-> > use. The mark-convention explanation offered for this gap is not the cause — both
-> > measurements already used Hyperliquid's end-of-hour mark.
+> > **This number has been corrected three times. Stop quoting it as a point estimate.**
+> >
+> > Two separate defects, both now understood:
+> >
+> > 1. **Wrong age origin.** The first figures (124.4 / 60.5 / 27.8) measured a pair's age from
+> >    its first hour in the *mark-joined* panel. Lighter's mark candles begin 2025-08-25, so
+> >    every pair already trading that day was relabelled "age 0" — **49% of that week-1 bucket
+> >    were pairs at least a month old**. Age must run from the pair's **first concurrent funding
+> >    hour**, which is what `panel.pair_age_hours` carries. (The mark-convention explanation once
+> >    offered for this gap is *not* the cause; both measurements already used the end-of-hour
+> >    mark.)
+> > 2. **Extreme sensitivity to the cleaning rule**, which is why the replacement figure (246 bp)
+> >    was no better. Measured on the correct origin by the orchestrating session: week-1 sd is
+> >    **198.9 bp unfiltered, 117.3 bp with frozen marks out, 79.9 bp with XPL and MON also out**
+> >    — a 2.5× swing across defensible rules, on 5,000–6,400 pair-hours. Task 5's own run reports
+> >    140.2 bp under its filter. All are correct for their rule; none is *the* number.
+> >
+> > **What is robust**: the mature bucket is **17.7 bp under every rule**, BTC/ETH/SOL are
+> > **9.9 bp**, and the gradient — young markets carry several times the basis risk of mature
+> > ones — holds regardless. Quote those. For week 1, quote the range and the rule, and never a
+> > bare point estimate.
 >
 > The five names the top-10 rule always excludes are the **safest** in the panel on this measure,
 > and the rule's effect is to tilt the universe toward small, new listings — precisely the cohort

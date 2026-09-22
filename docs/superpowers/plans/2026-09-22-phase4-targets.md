@@ -147,10 +147,12 @@ Task 1 (adjacency-safe joins and the unit assertions) first — everything else 
 > untouched** — but Target A's Lighter per-venue view spans **96** such markets. Do not apply the
 > crypto-calibrated bound there; use each market's own scaled clamp and assert it.
 
-- [ ] **Step 1: write the failing tests.** Round-trip: take Phase 1's confirmed formula, feed a known premium, settle it, invert it, and assert the premium comes back within the truncation width (~8e-4 percent). Assert a market with `base_interest_rate_pct = 0.0032` inverts with its own parameters, not BTC's. Assert a baseline hour returns an interval and `premium_is_point_identified = False`. Assert every point estimate falls **outside** the market's dead-zone band.
-- [ ] **Step 2: run, expect failure.**
-- [ ] **Step 3: implement**, then re-run.
-- [ ] **Verify:** on the real data, **356,800** off-baseline hours invert and the correlation with Hyperliquid's premium is **0.845**. **Do not verify "zero band violations"** — that check is a tautology and has been withdrawn. **Do not re-run F6** — it is settled (see the box above). Instead assert the redundancy explicitly: Spearman of the inverted premium against Hyperliquid's premium equals that of the raw `signed_rate_fraction` to four decimals, so a reader cannot later mistake the column for new data.
+- [x] **Step 1: write the failing tests.** Round-trip: take Phase 1's confirmed formula, feed a known premium, settle it, invert it, and assert the premium comes back within the truncation width (~8e-4 percent). Assert a market with `base_interest_rate_pct = 0.0032` inverts with its own parameters, not BTC's. Assert a baseline hour returns an interval and `premium_is_point_identified = False`. ~~Assert every point estimate falls **outside** the market's dead-zone band.~~ **Withdrawn as a tautology by the correction box above; not written.** In its place: the dead-zone interval must contain every premium that settles there, *including* the truncation slack outside the band proper.
+- [x] **Step 2: run, expect failure.**
+- [x] **Step 3: implement**, then re-run. 45 tests in `tests/test_premium.py`, all green; `ruff` clean on both files.
+- [x] **Verify:** on the real data, **356,800** off-baseline hours invert and the correlation with Hyperliquid's premium is **0.845**. **Do not verify "zero band violations"** — that check is a tautology and has been withdrawn. **Do not re-run F6** — it is settled (see the box above). Instead assert the redundancy explicitly: Spearman of the inverted premium against Hyperliquid's premium equals that of the raw `signed_rate_fraction` to four decimals, so a reader cannot later mistake the column for new data. **Measured over the 978,572 matched pair-hours (aliases excluded, which is the set behind every figure above): 356,800 point-identified (36.46%), 621,772 bounded to an interval; on the 337,905 rows carrying the 0.01% base rate, Pearson 0.8450 for the inverted premium against 0.8575 for the raw rate, and Spearman 0.6233 for both — gap 0.00e+00. The redundancy is exact.** Target A's per-venue view applies the market's own scaled clamp on every hour: 0.05 on 136 markets (1,193,708 h), **0.025 on the 96 multiplier-50 markets (382,356 h)**, 0.0005 on the 2 multiplier-1 markets, 0.0 on MKR, whose published parameters are all zero.
+
+> **Two deviations from the interface as written, both recorded here.** (1) The premium columns are emitted as per-hour signed **fractions**, not percent: `hl_premium` is a fraction, the two sit side by side in the same frame, and a 100× mismatch between neighbouring columns is the silent bug Task 1 exists to stop. The formula itself runs in percent, exactly as specified. (2) The dead-zone bounds are read off the settled rate (`8·rate − clamp`, `8·rate + clamp + 8e-4`) rather than quoted as `interest ± clamp`, because truncation lets a premium up to 8e-4 outside the band settle at the baseline rate — the literal bound can be violated by real data and this one cannot.
 
 ### Task 3: The targets
 
@@ -181,10 +183,10 @@ Two flags, both emitted, neither used to delete a row.
 
 **`venue_clamped`** — Lighter's outer clamp binding. **142 hours, 23 symbols, 42 distinct days.** Mean |spread| **28.5 bp/h, 149× the overall mean**, but only **2.2% of all gross spread**. Keep them (dropping them fits on a sample conditioned on the event never happening), exclude them from hyperparameter selection (a squared-error fit would bend the whole model to chase them), report them separately. They are a risk and capacity question, not a revenue one.
 
-- [ ] **Step 1: write the failing tests.** Assert a fixture hour with both venues at baseline gets `joint_baseline = True` and a spread of exactly `5e-7` (or `1.25e-5` where Lighter's base rate is 0). Assert the flags never remove rows. Assert a per-market base rate of 0 is handled.
-- [ ] **Step 2: run, expect failure.**
-- [ ] **Step 3: implement**, then re-run.
-- [ ] **Verify:** `joint_baseline` is true on **445,904** rows (45.57%) with exactly **two** distinct spread values among them; `venue_clamped` is true on **142** rows across **23** symbols.
+- [x] **Step 1: write the failing tests.** Assert a fixture hour with both venues at baseline gets `joint_baseline = True` and a spread of exactly `5e-7` (or `1.25e-5` where Lighter's base rate is 0). Assert the flags never remove rows. Assert a per-market base rate of 0 is handled.
+- [x] **Step 2: run, expect failure.**
+- [x] **Step 3: implement**, then re-run. 14 tests added to `tests/test_targets.py` (16 → 30); suite green.
+- [x] **Verify:** `joint_baseline` is true on **445,904** rows (45.57%) with exactly **two** distinct spread values among them; `venue_clamped` is true on **142** rows across **23** symbols. **Measured, through `targets.add_venue_flags` itself, on the 978,572 non-alias concurrent pair-hours: 445,904 (45.5668%), two values `5.0e-7` (445,795 rows, base rate 0.01%) and `1.25e-5` (109 rows, base rate 0), mean `+5.029e-7` = 0.4406%/year; 142 rows, 23 symbols, 42 days, mean |spread| 28.5 bp/h (149× overall), 2.2% of gross spread. Row count unchanged; mean spread −6.23e-8 overall against −5.36e-7 through `skill_metric_rows`.** The flag uses each market's own `base_interest_rate_pct` and `funding_clamp_big_pct`; a non-positive published clamp flags nothing, since MKR reports 0.0 for every parameter while its own history reaches 6.36e-4.
 
 ### Task 5: Is this trade hedged? — the measurement that could change the target
 
@@ -202,8 +204,42 @@ Writes `data/phase2/qa/basis_drift.md`: per-symbol and pooled distribution of `(
 - [ ] **Step 1: write the failing tests** — assert hour-close against hour-close; assert the report carries the mark-convention caveat; assert `lighter_mark_candles`' later start (2025-08-25, 212 days after the trade candles) is handled rather than silently truncating the join.
 - [ ] **Step 2: run, expect failure.**
 - [ ] **Step 3: implement**, then run on the real data.
-- [ ] **Verify:** the report reproduces sd(Δbasis) = **22.3 bp at 24 hours** and **17.7%** of 24-hour holds exceeding 18.91 bp, with lag-1 of the level at **0.9342**.
-- [ ] **Step 4: record the consequence** in `docs/phase4/decisions.md` F2. Under ~6 bp sd at 24h on traded prices, the funding target above stands with `H = 24`. Near 22 bp, the primary target becomes funding **net of basis**, and Phase 9 sizes nothing until it exists.
+> ### ⚠️ This task's gate was written before the data was repaired — corrected 2026-09-22
+>
+> Two of the three numbers below are superseded and **must not be reproduced as gates**:
+>
+> - **sd(Δbasis) = 22.3 bp at 24h is not reproducible under any convention tried** (pooled 29.93,
+>   per-symbol-sd median 17.68, mean 29.46, winsorised 17.40). It was also measured on a
+>   `lighter_mark_candles` that was missing **337,412 bars in ~200-hour blocks** — a paging bug,
+>   since fixed and re-collected. On the repaired data the defensible range is **18–30 bp**
+>   depending on the cleaning rule, and the most stable statistic is the **median |24h drift| of
+>   7.5–7.6 bp**, which reproduces everywhere. Report the range and the rule; do not gate on a
+>   point estimate.
+> - **lag-1 of the level at 0.9342 is largely a frozen-price artifact.** Hyperliquid's `mark_px`
+>   freezes on delisted markets rather than stopping (AI frozen at 0.12555 for 99.99% of hours
+>   since 2025-08-25), producing basis values to −10,094 bp. Removing ~0.25% of rows takes lag-1
+>   from 0.989 to **0.26–0.28** and level sd from ~137 bp to ~15 bp. There is no persistent
+>   tradeable basis; there is a handful of dead markets. **Report filtered and unfiltered.**
+>
+> **17.7% of 24-hour holds exceeding the carry DOES reproduce** (17.0–18.0% under every filter)
+> and remains a valid gate.
+>
+> **The alignment check is still valid and still mandatory**: hour-close against hour-close gives
+> lag-1 ~0.989 unfiltered; either side shifted an hour collapses it to ~0.65. **If the
+> autocorrelation comes out near zero, the alignment is wrong — stop.** Reproduce the
+> hour-median-vs-hour-close artifact (~98 bp) once as proof the alignment is what you think it
+> is, then discard it.
+>
+> **Two things this task must now also report**, both found after the plan was written:
+> 1. **Age-stratified drift.** Basis risk is concentrated in young markets: week 1 **246 bp**,
+>    weeks 2–4 131, months 1–3 30.5, 3 months+ 17.7, against **9.9 bp** for BTC/ETH/SOL. Measure
+>    age from `panel.pair_age_hours` (the pair's first *concurrent funding* hour), **never** from
+>    the first hour of the mark-joined panel — mark candles start 2025-08-25, and using that
+>    origin relabels mature pairs as week-1 and halves the figure.
+> 2. **The stale-market filter**, since it drives the level statistics entirely.
+
+- [ ] **Verify:** the report reproduces **17.0–18.0%** of 24-hour holds exceeding the carry, states sd(Δbasis) at 24h as a **range with its cleaning rule** (18–30 bp), reports median |24h drift| (~7.5 bp), reports lag-1 **both filtered and unfiltered**, and reports the age-stratified table. The alignment check must pass.
+- [ ] **Step 4: record the consequence** in `docs/phase4/decisions.md` F2. The original threshold read: under ~6 bp sd at 24h on traded prices the funding target stands at `H = 24`; near 22 bp the primary target becomes funding **net of basis**. **On the repaired data the measured range is 18–30 bp, so that second branch is the live one** — but it is measured on *mark* prices off different venue references, so F2 stays open pending traded prices. Phase 9 sizes nothing until it is resolved. Note also that Phase 3 Task 5 measured net carry at **−22 to −32 bp** across every decile and age bucket, which is the wider context this decision sits in.
 
 ### Task 6: Document what was built
 
