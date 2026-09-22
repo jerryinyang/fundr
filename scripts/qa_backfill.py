@@ -156,9 +156,19 @@ def roster_diff(archive_coins: list[str], meta_coins: list[str]) -> dict:
             "both": len(a & m)}
 
 
-def vendor_crosscheck(ox, venue: str, symbol: str, ours: pl.DataFrame, *, days: int = 30,
+def _vendor_ms(value) -> int:
+    """The live API returns ISO strings ('2026-09-21T13:26:00.117Z'); fixtures used epoch ms."""
+    if isinstance(value, str):
+        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp() * 1000)
+    return int(value)
+
+
+def vendor_crosscheck(ox, venue: str, symbol: str, ours: pl.DataFrame, *, days: int = 29,
                       tol: float = VENDOR_TOL) -> dict:
-    """Free-tier 0xArchive cross-check (handoff §8 action 6; the free tier reaches ~30 days).
+    """Free-tier 0xArchive cross-check (handoff §8 action 6).
+
+    The free tier holds ~30 days and answers a request for exactly 30 with a 403, so the
+    default window sits strictly inside it (measured 2026-09-22).
 
     Units already agree: the vendor's HL `funding_rate` is HL's own fraction, and its Lighter
     `funding_rate` is Lighter's native percent / 100 (P8) -- both on our `signed_rate_fraction`
@@ -171,7 +181,7 @@ def vendor_crosscheck(ox, venue: str, symbol: str, ours: pl.DataFrame, *, days: 
     if not rows:
         return {"symbol": symbol, "venue": venue, "rows_vendor": 0, "rows_ours": ours.height,
                 "matched_lag0": 0, "matched_lag_minus_1h": 0, "max_abs_diff": None}
-    vendor = (pl.DataFrame({"timestamp": [int(r["timestamp"]) for r in rows],
+    vendor = (pl.DataFrame({"timestamp": [_vendor_ms(r["timestamp"]) for r in rows],
                             "vendor": [float(r["funding_rate"]) for r in rows]})
               .with_columns(pl.from_epoch("timestamp", time_unit="ms")
                             .dt.cast_time_unit("ms").dt.truncate("1h").alias("settle_time"))
@@ -365,6 +375,16 @@ def main() -> int:
         lines += ["## Independent cross-check (0xArchive free tier, last 30 days)", "",
                   "Handoff §8 action 6. Units already agree (P8): the vendor's HL rate is HL's "
                   "own fraction, its Lighter rate is Lighter's percent ÷ 100.", "",
+                  "**Read the two venues differently (measured 2026-09-22).** The vendor's "
+                  "LIGHTER series is settled hourly funding and matches ours to ~1e-20 -- a "
+                  "genuine independent confirmation. Its HYPERLIQUID series is sampled every "
+                  "60s and carries the *instantaneous* rate, not the settled one, so it is not "
+                  "comparable to `hl_funding` row-for-row: the residual below is ~2.3e-5, the "
+                  "scale of funding itself, and the match counts are an artifact of comparing "
+                  "two different quantities rather than evidence about our data. HL's settled "
+                  "rates were validated separately in Phase 1 (245/245 formula reproduction). "
+                  "To use the vendor on HL, join it to `hl_asset_ctxs` per-minute rows instead.",
+                  "",
                   _md_table(pl.DataFrame(vendor_rows)), "",
                   f"credits logged this run: {len(ox.calls)} calls", ""]
 

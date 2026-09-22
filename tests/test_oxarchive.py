@@ -30,3 +30,15 @@ def test_get_all_follows_cursor():
         return httpx.Response(200, json={"success": True, "data": data, "meta": {"next_cursor": nxt}})
 
     assert _client(handler).get_all("/v1/x") == ["a", "b"]
+
+
+def test_key_accepts_either_env_spelling(monkeypatch):
+    # The docs and Phase 1 standardised on OXARCHIVE_API_KEY, but the project's own .env
+    # spells it ARCHIVE_OX_API_KEY. Reading only one name left Task 8's vendor cross-check
+    # unrunnable with a key sitting right there, so both are accepted.
+    for name in ("OXARCHIVE_API_KEY", "ARCHIVE_OX_API_KEY"):
+        monkeypatch.delenv("OXARCHIVE_API_KEY", raising=False)
+        monkeypatch.delenv("ARCHIVE_OX_API_KEY", raising=False)
+        monkeypatch.setenv(name, f"key-from-{name}")
+        api = oxarchive.OXArchive(client=httpx.Client(base_url=oxarchive.BASE_URL))
+        assert api._client.headers["X-API-Key"] == f"key-from-{name}"

@@ -33,9 +33,18 @@ completeness, because a coin listed mid-day is legitimately short.
 - 1,087 of 1,218 days are at or above 0.99. Mean of the daily medians: 0.9835.
 - Overall, 98.22% of the 1,440-minute ideal is present.
 - **131 days sit below 0.99**, ranging from 0.108 to 0.99.
-- 52 days exceed 1.0, at most 1.0049 (1,447 minutes for a coin). These are a handful of
-  duplicate or boundary-straddling timestamps, not extra data; downstream code should
-  de-duplicate on `(time, coin)` rather than assume exactly 1,440 rows.
+- 52 days exceed 1.0, at most 1.0049 (1,447 minutes for a coin), **all of them in
+  2023-05-22 → 2023-10-14**. **Corrected 2026-09-22 after independent review:** these are
+  *not* duplicate or boundary-straddling timestamps. The written parquet contains **zero
+  `(time, coin)` duplicates** and zero rows whose `time` falls outside its partition date.
+  The extra rows are **off-grid sub-minute samples** — rows whose `time` carries a non-zero
+  seconds component (2023-07-06 has 252 of them, with gaps at 29 s, 30 s, 33 s, 38 s beside
+  the usual 60 s). So de-duplicating on `(time, coin)` is a **no-op** and would leave every
+  extra row in place while implying the problem was handled. Downstream must instead
+  **truncate `time` to the minute and de-duplicate on `(minute, coin)`**, which caps distinct
+  minutes per coin at exactly 1,440. Off-grid timestamps also occur on days that total
+  exactly 1,440 (2025-09-27 has 213 with no minute collisions), so a clean 60 s cadence is a
+  property of the short days examined, not of the dataset as a whole.
 
 ### Short days are truncated, not sampled sparsely
 
@@ -98,7 +107,9 @@ Only the recent 2026 days are genuine candidates for arriving more complete late
   computed on partial sessions.
 - Missing minutes are always a tail of the day. Use each day's last observed minute as the
   session end rather than assuming 23:59.
-- De-duplicate on `(time, coin)`; a small number of coin-days carry up to 1,447 rows.
+- Truncate `time` to the minute and de-duplicate on `(minute, coin)`; a small number of
+  coin-days carry up to 1,447 rows, and `(time, coin)` alone will not remove them (see the
+  correction above).
 
 ## Task 8 QA: coverage, gaps, alignment and vendor cross-check
 

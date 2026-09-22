@@ -11,7 +11,10 @@ _KEEP_HEADERS = ("credit", "ratelimit", "rate-limit", "request-id")
 
 class OXArchive:
     def __init__(self, client: httpx.Client | None = None, key: str | None = None):
-        key = key or os.environ["OXARCHIVE_API_KEY"]
+        # The docs and Phase 1 use OXARCHIVE_API_KEY; the project's .env spells it
+        # ARCHIVE_OX_API_KEY. Accept both -- reading only one left Task 8's vendor
+        # cross-check unrunnable with a usable key already on disk.
+        key = key or os.environ.get("OXARCHIVE_API_KEY") or os.environ["ARCHIVE_OX_API_KEY"]
         self._client = client or httpx.Client(base_url=BASE_URL, timeout=60)
         self._client.headers["X-API-Key"] = key
         self.calls: list[dict] = []

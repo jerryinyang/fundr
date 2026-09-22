@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import polars as pl
 import pytest
@@ -123,3 +123,36 @@ def test_vendor_crosscheck_counts_matches_at_both_lags():
     assert out["rows_vendor"] == 5
     assert out["matched_lag0"] == 5
     assert out["matched_lag0"] >= out["matched_lag_minus_1h"]
+
+
+def test_vendor_crosscheck_parses_iso_timestamps():
+    # The live API returns ISO strings ("2026-09-21T13:26:00.117Z"), not epoch ms. The original
+    # fixture used ints, so `int(r["timestamp"])` passed its test and would have raised
+    # ValueError on the first real response.
+    ours = _funding("BTC", 5, rate=0.00001, vary=True)
+
+    class FakeOX:
+        def get_all(self, path, **params):
+            return [{"timestamp": datetime.fromtimestamp(t / 1000, UTC)
+                     .strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                     "funding_rate": str(r)}
+                    for t, r in zip(ours["settle_time"].dt.epoch("ms").to_list(),
+                                    ours["signed_rate_fraction"].to_list())]
+
+    out = vendor_crosscheck(FakeOX(), "hyperliquid", "BTC", ours, days=29)
+    assert out["rows_vendor"] == 5
+    assert out["matched_lag0"] == 5
+
+
+def test_vendor_crosscheck_stays_inside_free_tier_retention():
+    # The free tier holds ~30 days and answers a request for exactly 30 with 403, so the
+    # default window must sit strictly inside it.
+    seen = {}
+
+    class FakeOX:
+        def get_all(self, path, **params):
+            seen.update(params)
+            return []
+
+    vendor_crosscheck(FakeOX(), "hyperliquid", "BTC", _funding("BTC", 1))
+    assert (seen["end"] - seen["start"]) < 30 * 86_400_000

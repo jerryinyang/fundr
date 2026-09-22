@@ -26,8 +26,12 @@ from fundr.store import data_root, probe_dir
 ARCHIVE_BUCKET = "hyperliquid-archive"
 NODE_BUCKET = "hl-mainnet-node-data"
 # Raised 2026-09-22 for the Phase 2b `asset_ctxs` backfill, measured at $0.922 (1,218 files,
-# 10.109 GB at $0.09/GB plus $0.012 of requests). $1.20 covers that pull plus roughly 300
-# quarantine re-fetches and still stops a runaway well short of a surprise.
+# 10.109 GB at $0.09/GB plus $0.012 of requests).
+# CORRECTED after independent review: an earlier comment here claimed $1.20 covers the pull
+# "plus roughly 300 quarantine re-fetches". It does not. A quarantine sweep re-fetches 131
+# short days at ~$0.13, so $0.922 + $0.13 + $0.13 = $1.18 -- the THIRD sweep trips
+# BudgetExceeded mid-flight. Re-running the quarantine more than twice needs either a raised
+# cap (a user decision) or the `last_modified` freeze described in docs/phase2/backfill_coverage.md.
 BUDGET_USD = 1.20
 REQUEST_USD = 0.000005  # upper bound per LIST/HEAD/GET request
 # Outbound list price per bucket, by the bucket's own region (see the module docstring). AWS's
