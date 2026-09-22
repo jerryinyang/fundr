@@ -14,7 +14,7 @@ day, downloaded 2026-09-22 by `scripts/backfill_hl_archive.py`.
 | Rows | 275,320,095 coin-minutes |
 | Parquet on disk | 9.0 GB (uncommitted, under `data/phase2/hl_asset_ctxs/`) |
 | Downloaded | 10.109 GB compressed, 1,218 GETs |
-| Spend | **$0.9221** (ledger: `data/phase2/aws_ledger.jsonl`) |
+| Spend | **$0.92222** (authoritative: summing `data/phase2/aws_ledger.jsonl`, 2,446 lines). The manifest's `spend_usd` reads 0.92209 and is **stale** — the last scoped run took the `record_run(partial=True)` path, which deliberately does not rewrite aggregates. The ledger is the record of what was billed. |
 
 The archive lags real time by about three days: the newest key on 2026-09-22 was `20260919`.
 
@@ -176,13 +176,38 @@ coins): **`archive_only` is empty, `meta_only` is empty.** HL has not dropped an
 coin from `meta` as of 2026-09-22 — a `meta`-built universe currently loses nothing. This is a
 point-in-time result, not a permanent guarantee; re-check if `meta` behavior changes.
 
-### Independent vendor cross-check — not run
+### Independent vendor cross-check — RAN 2026-09-22, and the two venues must be read differently
 
-`vendor_crosscheck` (0xArchive) is implemented and unit-tested (`FakeOX`, all assertions pass),
-but the live cross-check against BTC/ENA (handoff §8 action 6) could **not** be executed in this
-environment: no `OXARCHIVE_API_KEY` is set, and none is present in the repo's `.env` (checked;
-this worktree does not even have a `.env` file). This is an environment gap, not a code defect —
-re-run `uv run python scripts/qa_backfill.py --vendor-symbols BTC ENA` once a key is available.
+An earlier version of this section said the cross-check could not run for want of an
+`OXARCHIVE_API_KEY`. That was wrong: the key existed, but `oxarchive.py` read only
+`OXARCHIVE_API_KEY` while the project's `.env` spells it `ARCHIVE_OX_API_KEY`. Both names are
+now accepted. Fixing that exposed two further bugs that had never been hit because the unit
+test used a shape the vendor never sends: `int(r["timestamp"])` raised on the live ISO strings,
+and a 30-day window is answered `403` (the free tier wants strictly less; the default is now
+29 days).
+
+Run with `uv run python scripts/qa_backfill.py --vendor-symbols BTC ETH SOL`.
+
+**Lighter — genuine independent confirmation.** 85/85, 86/86 and 86/86 hours matched at lag 0
+with a maximum absolute difference of ~1e-20, i.e. floating-point noise. An outside vendor
+reproduces the Lighter funding backfill exactly.
+
+**Hyperliquid — not comparable, and the raw match counts are misleading.** The vendor samples HL
+every 60 s (measured median gap exactly 60.0 s) and serves the *instantaneous* rate, not the
+settled one. The report's own table shows counts like BTC 339/506 at `tol = 1e-9`, which looks
+like partial agreement but is not:
+
+- 366 of those 506 hours had our settled rate pinned at the **floor** (0.0000125). The
+  instantaneous rate also clamps to the floor when the premium is near zero, so 339 of those
+  366 "match" by definitional coincidence rather than by agreeing about anything.
+- On the 140 hours where the settled rate was **off** the floor, agreement was **0 of 140** at
+  `tol = 1e-9`, with a residual of ~2.3e-5 — the scale of funding itself. A clean, total
+  disagreement.
+
+So a non-match here is **not** evidence of a defect in `hl_funding`; the two series measure
+different quantities. HL's settled rates were validated independently in Phase 1 by reproducing
+the venue's formula 245/245. To use the vendor as a real check on HL, join it to the per-minute
+`hl_asset_ctxs` rows instead of to settled hourly funding.
 
 ### What a later phase must handle
 
@@ -195,4 +220,7 @@ re-run `uv run python scripts/qa_backfill.py --vendor-symbols BTC ENA` once a ke
   9 coins (AAVE, CFX, COMP, FTM, GMX, SNX, XRP, kBONK, kFLOKI) sit exactly at 24h — right at the
   boundary, not materially longer than a day, but worth a second look if a future run pushes any
   of them further.
-- Vendor cross-check remains unexecuted; run it once `OXARCHIVE_API_KEY` exists.
+- The vendor cross-check has run (see above). Lighter is independently confirmed; the
+  Hyperliquid match counts must **not** be read as partial agreement — see the floor-clamp
+  explanation. Any phase re-running it should compare HL against `hl_asset_ctxs`, not
+  `hl_funding`.

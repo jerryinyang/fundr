@@ -379,9 +379,13 @@ def main() -> int:
                   "LIGHTER series is settled hourly funding and matches ours to ~1e-20 -- a "
                   "genuine independent confirmation. Its HYPERLIQUID series is sampled every "
                   "60s and carries the *instantaneous* rate, not the settled one, so it is not "
-                  "comparable to `hl_funding` row-for-row: the residual below is ~2.3e-5, the "
-                  "scale of funding itself, and the match counts are an artifact of comparing "
-                  "two different quantities rather than evidence about our data. HL's settled "
+                  "comparable to `hl_funding` row-for-row. The HL match counts below are a "
+                  "FLOOR-CLAMP ARTIFACT, not partial agreement: measured on BTC, 366 of 506 "
+                  "overlapping hours had the settled rate pinned at the floor 0.0000125, and "
+                  "the instantaneous rate clamps to the same floor when the premium is near "
+                  "zero, so those matches are a definitional coincidence. On the 140 hours "
+                  "OFF the floor, agreement was 0 of 140, residual ~2.3e-5 -- the scale of "
+                  "funding itself. So a non-match is not evidence about our data. HL's settled "
                   "rates were validated separately in Phase 1 (245/245 formula reproduction). "
                   "To use the vendor on HL, join it to `hl_asset_ctxs` per-minute rows instead.",
                   "",

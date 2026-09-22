@@ -142,7 +142,10 @@ refuses to start if that does not match `dataset.root()`. The other four scripts
 - **Coverage**: 1,218 day-partitions, **2023-05-20 → 2026-09-19**, 275,320,095 rows, 194,664
   coin-days measured, 9.0 GB on disk (uncommitted, under `data/phase2/hl_asset_ctxs/`). Overall
   98.22% of the 1,440-minute ideal is present; 1,087 of 1,218 days are ≥ 0.99 complete.
-- **Billed**: **$0.9221** actual (`spend_usd` in the manifest: 0.92209229709; the plan's
+- **Billed**: **$0.92222** actual, from summing `data/phase2/aws_ledger.jsonl` (2,446 lines),
+  which is the authoritative record of what was billed. The manifest's `spend_usd` reads
+  0.92209 and is **stale**: the final scoped run took the `record_run(partial=True)` path,
+  which deliberately leaves aggregates alone. Quote the ledger, not the manifest. (The plan's
   pre-run estimate was $0.922 — 10.109 GB compressed at the archive bucket's own $0.09/GB
   `us-east-1` rate, plus 1,218 GETs). `BUDGET_USD = 1.20` in
   `src/fundr/sources/hl_archive.py`. **A full quarantine re-sweep of the 131 short days costs
@@ -291,10 +294,14 @@ refuses to start if that does not match `dataset.root()`. The other four scripts
    confirmation of `lighter_funding`. Its Hyperliquid series samples HL every ~60 s and reports
    the **instantaneous running rate**, not the settled one (measured median gap 60.0 s; residual
    against settled hourly ~2.3e-5, the scale of funding itself) — it is not comparable to
-   `hl_funding` row-for-row, and the exact-match counts in `coverage_report.md`'s vendor table
-   (up to 395 of 506 vendor rows landing within `1e-9` of a settled row, purely by two series
-   passing through the same value at different times) are **an artifact of comparing two
-   different quantities, not evidence about `hl_funding`'s correctness**. HL's settled rates
+   `hl_funding` row-for-row. The exact-match counts in `coverage_report.md`'s vendor table (e.g.
+   BTC 339 of 506 within `1e-9`) look like partial agreement but are **a floor-clamp artifact**:
+   366 of those 506 hours had the settled rate pinned at the floor `0.0000125`, and the
+   instantaneous rate clamps to the same floor whenever the premium is near zero, so those
+   "matches" are a definitional coincidence. On the 140 hours where the settled rate was **off**
+   the floor, agreement was **0 of 140** — a clean, total disagreement. The counts are therefore
+   **an artifact of comparing two different quantities, not evidence about `hl_funding`'s
+   correctness**. HL's settled rates
    were independently validated in Phase 1 by reproducing the settlement formula on 245/245
    off-baseline hours. To cross-check HL against the vendor, join to `hl_asset_ctxs`'s
    per-minute running rate instead of `hl_funding`. The vendor's API key is accepted under
