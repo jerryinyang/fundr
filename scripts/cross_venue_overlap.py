@@ -16,8 +16,8 @@ from pathlib import Path
 
 import polars as pl
 
-from fundr import dataset
-from qa_backfill import _load, _md_table, match_symbols
+from fundr import alias, dataset
+from qa_backfill import _load, _md_table
 
 MONTH_HOURS = 720
 QUARTER_HOURS = 2160
@@ -25,13 +25,21 @@ TOP_N = 10
 
 
 def pair_hours(hl: dict[str, pl.DataFrame], li: dict[str, pl.DataFrame],
-               matched: list[str]) -> pl.DataFrame:
-    """One row per (symbol, hour) that BOTH venues settled. The spine for everything below."""
-    def side(frames, name):
-        parts = [frames[s].select(pl.lit(s).alias("symbol"), "settle_time") for s in matched]
+               matched: list[tuple[str, str]]) -> pl.DataFrame:
+    """One row per (canonical symbol, hour) that BOTH venues settled. The spine for everything
+    below.
+
+    A pair is TWO symbols, not one: `kPEPE` on Hyperliquid is `1000PEPE` on Lighter. Each leg is
+    read under its own venue's name and relabelled with the canonical (Hyperliquid) symbol, which
+    is also the name `hl_asset_ctxs` ranks under."""
+    def side(frames, legs):
+        parts = [frames[leg].select(pl.lit(symbol).alias("symbol"), "settle_time")
+                 for symbol, leg in legs]
         return (pl.concat(parts).unique().rename({"settle_time": "hour"})
                 if parts else pl.DataFrame(schema={"symbol": pl.String, "hour": pl.Datetime("ms")}))
-    return side(hl, "hl").join(side(li, "li"), on=["symbol", "hour"], how="inner")
+    return side(hl, [(h, h) for h, _ in matched]).join(
+        side(li, [(h, li_symbol) for h, li_symbol in matched]),
+        on=["symbol", "hour"], how="inner")
 
 
 def per_pair(both: pl.DataFrame) -> pl.DataFrame:
@@ -134,7 +142,8 @@ def main() -> int:
 
     hl = _load("hl_funding", "coin")
     li = _load("lighter_funding", "market_id")
-    matched = match_symbols(list(hl), list(li))["matched"]
+    matched = alias.matched_pairs(list(hl), list(li))
+    aliased = [pair for pair in matched if pair[0] != pair[1]]
     both = pair_hours(hl, li, matched)
     if both.is_empty():
         print("no concurrent overlap at all")
@@ -152,11 +161,14 @@ def main() -> int:
     lines = [
         "# Concurrent cross-venue overlap", "",
         f"Generated {datetime.now(UTC):%Y-%m-%d %H:%M}Z by `scripts/cross_venue_overlap.py`.", "",
-        "`qa_backfill.py`'s 100 matched symbols is a **lifetime** count. Target B — the "
+        "`qa_backfill.py`'s matched-symbol count is a **lifetime** count. Target B — the "
         "HL-minus-Lighter funding spread — only exists where an asset settled on *both* venues "
         "in the *same* hour. This is that intersection.", "",
+        "Symbols are matched through `fundr.alias.matched_pairs`: exact symbol matches plus the "
+        "five hand-checked denomination aliases, and nothing else.", "",
         "## Headline", "",
-        f"- symbols matching by exact symbol (lifetime): **{len(matched)}**",
+        f"- symbols matched across the two venues (lifetime): **{len(matched)}** "
+        f"— {len(matched) - len(aliased)} exact plus {len(aliased)} denomination aliases",
         f"- of those, pairs with at least one concurrent hour: **{concurrent}**",
         f"- pairs with ≥ {MONTH_HOURS} concurrent hours (30 days): "
         f"**{int((pairs['shared_hours'] >= MONTH_HOURS).sum())}**",
@@ -164,6 +176,21 @@ def main() -> int:
         f"**{int((pairs['shared_hours'] >= QUARTER_HOURS).sum())}**",
         f"- total concurrent pair-hours: **{both.height:,}**",
         f"- median concurrent hours per pair: {pairs['shared_hours'].median()}", "",
+        "## The five denomination-scaled pairs", "",
+        "These five are matched by name, not by unit. **The scaling is per venue leg, not per "
+        "pair.** Funding *rates* are unaffected — the counts above and the spread itself are "
+        "safe — but every price, size and notional built from these markets is not.", "",
+        _md_table(pl.DataFrame(
+            [{"hyperliquid": hl_symbol, "lighter": li_symbol,
+              "hl_multiplier": alias.size_multiplier(hl_symbol, "hl"),
+              "lighter_multiplier": alias.size_multiplier(li_symbol, "lighter"),
+              "shared_hours": int(pairs.filter(pl.col("symbol") == hl_symbol)["shared_hours"]
+                                  .sum())}
+             for hl_symbol, li_symbol in aliased])), "",
+        "`kBONK`, `kFLOKI`, `kPEPE` and `kSHIB` carry 1000 on **both** legs — both venues already "
+        "quote 1000 tokens. `NOT` does not: Hyperliquid lists `NOT`, one token, not `kNOT`, "
+        "against Lighter's `1000NOT`, so the legs differ by exactly 1000x (measured price ratio "
+        "0.000999). See `src/fundr/alias.py` for the measurement.", "",
         "## When the overlap window truly starts", "",
         f"- first hour any pair is live on both venues: **{start}**",
         f"- last such hour: {end}",

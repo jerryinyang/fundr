@@ -83,17 +83,19 @@ Task 1 (alias) first: every later count depends on it and `handoff.md` §3's num
 **Files:** create `src/fundr/alias.py`, `tests/test_alias.py`
 
 **Interfaces produced:**
-- `ALIASES: dict[str, tuple[str, int]]` — Lighter symbol → (Hyperliquid symbol, `size_multiplier`). Exactly five entries; `size_multiplier` is 1000 for the four `k`/`1000` pairs and 1000 for `NOT`/`1000NOT`.
+- `ALIASES: dict[str, tuple[str, int]]` — Lighter symbol → (Hyperliquid symbol, `size_multiplier`). Exactly five entries; `size_multiplier` is 1000 for the four `k`/`1000` pairs and ~~1000~~ **1** for `NOT`/`1000NOT`.
+
+  > **Corrected 2026-09-22 by measurement, during Task 1.** The multiplier is **per venue, not per pair**, and the `NOT` figure above was wrong. Hyperliquid `mark_px` against Lighter mark-candle `close`, 772 common hours over 33 days sampled 2026-05-12 → 2026-09-18: the four `k` pairs read **1.0007 / 1.0001 / 1.0006 / 1.0004** — both venues already quote 1000 tokens, so both legs carry 1000. `NOT`/`1000NOT` reads **0.000999** — Hyperliquid lists `NOT` (one token), not `kNOT`, so the legs differ by exactly 1000×. `size_multiplier("NOT", "hl") == 1` and `size_multiplier("1000NOT", "lighter") == 1000`. **Task 3's verify step ("the alias pairs appear with `size_multiplier = 1000`") is therefore wrong for the `NOT` row and must not be asserted as written.**
 - `canonical(symbol: str, venue: str) -> str` — maps either venue's symbol to one canonical key.
 - `size_multiplier(symbol: str, venue: str) -> int` — the factor by which that venue's price and size units differ from the canonical unit. **Funding rates are unaffected; prices, sizes and notionals are not.**
 - `matched_pairs(hl_symbols, lighter_symbols) -> list[tuple[str, str]]` — exact matches plus the five aliases, and nothing else.
 
 **Why the table is hard-coded and small, and why nothing fuzzy is allowed:** measurement found exactly five recoverable pairs and six fuzzy candidates at 0.8 similarity, all six false. `HMSTR`/`MSTR` pairs Hamster Kombat with MicroStrategy; `ME`/`GME` pairs Magic Eden with GameStop. A wrong alias silently corrupts a spread and nothing downstream would catch it.
 
-- [ ] **Step 1: write the failing tests.** Assert `matched_pairs` returns 105 canonical pairs from the two venues' real symbol lists; assert every one of the six fuzzy candidates is **absent**; assert `size_multiplier("1000PEPE", "lighter") == 1000` and `size_multiplier("kPEPE", "hl") == 1000` resolve to the same canonical unit; assert `size_multiplier` is 1 for an ordinary symbol.
-- [ ] **Step 2: run, expect failure** — `uv run pytest tests/test_alias.py` → module absent.
-- [ ] **Step 3: implement**, then re-run.
-- [ ] **Verify:** `uv run pytest tests/test_alias.py -q` passes, and `matched_pairs` over the real partition lists returns **105**.
+- [x] **Step 1: write the failing tests.** Assert `matched_pairs` returns 105 canonical pairs from the two venues' real symbol lists; assert every one of the six fuzzy candidates is **absent**; assert `size_multiplier("1000PEPE", "lighter") == 1000` and `size_multiplier("kPEPE", "hl") == 1000` resolve to the same canonical unit; assert `size_multiplier` is 1 for an ordinary symbol.
+- [x] **Step 2: run, expect failure** — `uv run pytest tests/test_alias.py` → module absent.
+- [x] **Step 3: implement**, then re-run.
+- [x] **Verify:** `uv run pytest tests/test_alias.py -q` passes, and `matched_pairs` over the real partition lists returns **105**. Done 2026-09-22: 9 tests pass, `matched_pairs` over `hl_funding`/`lighter_funding` returns **105** (100 exact + 5 alias).
 
 ### Task 2: Point-in-time size ranking, both venues, fail-closed
 
@@ -133,9 +135,10 @@ Defaults, from `decisions.md`: `--pool venue` (D1), `--rebalance daily` (D2), `-
 - **`pairs_live_this_hour` on every cross-venue row.** The cross-section grows sevenfold; no cross-sectional statistic may be reported without conditioning on it. Over the first six weeks the median surviving pairs per hour is 8.
 - **Both rank columns are carried, neither gates.** `in_hl_top10` and `in_lighter_top10` are booleans on the row, not filters applied to it.
 - **`size_multiplier` and `is_alias_pair` travel with every row**, so a later notional feature cannot silently mis-scale a `k`/`1000` market.
+- **`pair_age_hours` on every row — added 2026-09-22.** Hours since the pair's first concurrent hour. Required because basis risk is concentrated almost entirely in young markets and **Phase 3's own size rule steers the universe toward them** (see the note below). Without this column the interaction cannot be measured and a later phase will silently trade the riskiest cohort.
 - **No `shift`-based lags anywhere.** Hyperliquid's history has 1,789 eight-hour intervals and 213 single-hour holes; joins are on an explicit hour difference.
 
-- [ ] **Step 1: write the failing tests.** Assert `per_venue` contains Hyperliquid-only symbols absent from `cross_venue`; assert `pairs_live_this_hour` is present and non-null on every cross-venue row; assert no row is dropped for being top-10; assert the alias pairs appear with `size_multiplier = 1000`.
+- [ ] **Step 1: write the failing tests.** Assert `per_venue` contains Hyperliquid-only symbols absent from `cross_venue`; assert `pairs_live_this_hour` is present and non-null on every cross-venue row; assert no row is dropped for being top-10; assert the alias pairs carry **each leg's own measured multiplier** — `kBONK`/`kFLOKI`/`kPEPE`/`kSHIB` are 1000 on *both* legs, but **`NOT` is 1 on the Hyperliquid leg against 1000 on Lighter's `1000NOT`** (measured ratio 0.000999; Hyperliquid lists `NOT`, not `kNOT`). ⚠️ **This step previously read "assert the alias pairs appear with `size_multiplier = 1000`", which is false for `NOT` — corrected 2026-09-22 after Task 1 measured it.** Asserting a flat 1000 here would either fail, or be "fixed" by forcing the wrong factor back in and silently scaling a price by 1000.
 - [ ] **Step 2: run, expect failure.**
 - [ ] **Step 3: implement**, then re-run.
 - [ ] **Verify:** `cross_venue` has **1,039,523** rows (978,572 plus the alias pairs' 60,951 — confirm, and if the figure differs, the alias join is wrong); `per_venue` covers 234 Hyperliquid and 235 Lighter markets; `panel` has zero rows where `in_hl_top10` is null and `rank_unavailable` is false.
@@ -146,9 +149,37 @@ Defaults, from `decisions.md`: `--pool venue` (D1), `--rebalance daily` (D2), `-
 
 Every number in `handoff.md` §3 is conditional on exact-symbol matching and changes once the five aliases land. `handoff.md` §6 action 3 asks for exactly this.
 
-- [ ] **Step 1:** replace the `match_symbols` call with `fundr.alias.matched_pairs`.
-- [ ] **Step 2:** run `uv run python scripts/cross_venue_overlap.py` (≈40 s) and regenerate `data/phase2/qa/cross_venue_overlap.md`.
-- [ ] **Verify:** the matched count reads **105**, not 100, and total concurrent pair-hours rise by **60,951**. Note in the report that the five recovered pairs are denomination-scaled.
+- [x] **Step 1:** replace the `match_symbols` call with `fundr.alias.matched_pairs`.
+
+  > **Not a drop-in swap.** `match_symbols` returns single symbols that key both venues; `matched_pairs` returns `(hl, lighter)` tuples that **differ** for the five aliases. `pair_hours` had to read each leg under its own venue's name and relabel both with the canonical (Hyperliquid) symbol. Nothing downstream changed: `per_pair`, `exclusion` and `hl_asset_ctxs` all key on the canonical symbol already, and open-interest notional is denomination-invariant (`open_interest x mark_px` scales reciprocally), so the `k` markets rank correctly without rescaling.
+- [x] **Step 2:** run `uv run python scripts/cross_venue_overlap.py` (≈40 s) and regenerate `data/phase2/qa/cross_venue_overlap.md`.
+- [x] **Verify:** the matched count reads **105**, not 100, and total concurrent pair-hours rise by **60,951**. Note in the report that the five recovered pairs are denomination-scaled. Done 2026-09-22: **105** matched, **1,039,523** pair-hours — exactly 978,572 + 60,951. `handoff.md` §3 updated with a dated note.
+
+> ### ⚠️ The size rule and basis risk pull in opposite directions — measured 2026-09-22
+>
+> Phase 4's D6 re-measurement, verified independently by the orchestrating session over 804,800
+> 24-hour holds, finds basis drift concentrated in **young** markets:
+>
+> | Pair age | 24h basis drift sd | Share of holds exceeding the 18.91 bp carry |
+> |---|---|---|
+> | Week 1 | **124.4 bp** | 29.9% |
+> | Weeks 2–4 | 60.5 bp | 21.9% |
+> | Months 1–3 | 27.8 bp | 23.1% |
+> | 3 months+ | 17.2 bp | 15.8% |
+> | **BTC / ETH / SOL** | **9.9 bp** | **5.0%** |
+>
+> The five names the top-10 rule always excludes are the **safest** in the panel on this measure,
+> and the rule's effect is to tilt the universe toward small, new listings — precisely the cohort
+> where the hedge is worst. Individual cases are extreme: XPL averaged **+1,747 bp** basis in its
+> first month, MON +120 to +190 bp for two months, both settling to single digits afterwards.
+>
+> **Nobody has looked at this interaction, and it is not a noise term — it is a second universe
+> rule competing with the first.** Excluding each market's first month costs ~8.6% of the panel
+> and removes most of the tail. Task 5 must measure it (see its added step); Task 3 must carry
+> `pair_age_hours` so that it can.
+>
+> Caveat that travels with every number here: these are **mark** prices off different venue
+> references, so part of the level is convention rather than realizable P&L. F2 stays open.
 
 ### Task 5: Does the size rule do anything? — the measurement this phase exists for
 
@@ -163,10 +194,12 @@ Two outputs into `data/phase2/qa/universe_diagnostics.md`:
 
 **Read the result honestly.** If there is no break by size, the exclusion was cosmetic and nothing downstream should filter on it. If there is a break, it will almost certainly not be at rank 10, and that measured threshold — not the design's round number — is what goes into the column's documentation. If the knob grid's dispersion is small relative to the deciles' spread, the four knobs were never the question.
 
-- [ ] **Step 1: write the failing tests** — assert the clustering is on the hour; assert the grid enumerates 24 cells; assert the report names measured values rather than pass/fail verdicts.
+3. **Size rule vs basis risk — added 2026-09-22.** Report, by point-in-time size decile, both the forecastability measure *and* the 24-hour basis drift sd with the share of holds exceeding the carry. The size rule and the age gradient (see the note above Task 5) point in opposite directions, so the honest question is not "does the size rule improve forecastability" but **"does it improve forecastability net of the basis risk it takes on"**. Also report the same split by `pair_age_hours` bucket, and the cost in panel rows of excluding each market's first month (~8.6%). If the excluded cohort is both more forecastable and far worse hedged, that is the finding, and it belongs in F1's answer rather than in a later phase's surprise.
+
+- [ ] **Step 1: write the failing tests** — assert the clustering is on the hour; assert the grid enumerates 24 cells; assert the report names measured values rather than pass/fail verdicts; assert the basis-by-decile and age-bucket splits are present.
 - [ ] **Step 2: run, expect failure.**
 - [ ] **Step 3: implement**, then run on the real panel.
-- [ ] **Verify:** the report exists, names the decile with the strongest and weakest forecastability, states whether a break exists and where, and reports the grid dispersion. Record the answer in `docs/phase3/decisions.md` under F1.
+- [ ] **Verify:** the report exists, names the decile with the strongest and weakest forecastability, states whether a break exists and where, reports the grid dispersion, and reports forecastability **net of basis risk** by decile and by age bucket. Record the answer in `docs/phase3/decisions.md` under F1.
 
 ### Task 6: Document what was built
 

@@ -233,6 +233,17 @@ refuses to start if that does not match `dataset.root()`. The other four scripts
   > an unpopulated field than a zero-fee venue. **No cost model should be built on either**
   > until someone checks Lighter's published schedule against a real fill. This matters because
   > round-turn cost is the number Phase 3's universe verdict turns on.
+  >
+  > **Follow-up 2026-09-22 — half right.** The Hyperliquid half stands: there is no fee column.
+  > The Lighter half was wrong. **Those zeros are real, not unpopulated.** A live probe of
+  > `/api/v1/orderBookDetails` returns `maker_fee: "0.0000"`, `taker_fee: "0.0000"` alongside
+  > `is_maker_fee_enabled: true` / `is_taker_fee_enabled: true`, and
+  > [docs.lighter.xyz/trading/trading-fees](https://docs.lighter.xyz/trading/trading-fees) (read
+  > 2026-09-22) confirms the default Standard account pays **0 maker / 0 taker** on perps. Opt-in
+  > Premium (maker 0.0040% / taker 0.0280%) and Plus (0.5 bp both sides) tiers exist but are not
+  > the default. Hyperliquid's published base is **taker 4.5 bp / maker 1.5 bp** with volume
+  > tiers ([hyperliquid.gitbook.io/hyperliquid-docs/trading/fees](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees),
+  > read 2026-09-22). Round-turn cost is now measured — see `docs/phase3/decisions.md` F-cost.
 - **Source**: HL `metaAndAssetCtxs` (`markets_hl`) and Lighter `/api/v1/orderBooks` +
   `/api/v1/orderBookDetails` (`markets_lighter`), both free, unauthenticated,
   `scripts/snapshot_markets.py`. Seconds to run.

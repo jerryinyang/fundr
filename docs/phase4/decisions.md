@@ -100,7 +100,10 @@ inversion assumes the formula runs on signed premium, which must be confirmed ag
 >    deleted.** Branch selection is `rate > baseline` vs `rate < baseline`; the band condition
 >    `P > I + 0.05` / `P < I − 0.05` reduces to *exactly that same inequality*. It cannot fail,
 >    on any data, ever. It is zero evidence the inversion is correct.
-> 2. **The inversion is mis-calibrated by ~2×, and this IS testable** — the one falsifiable
+> 2. ~~**The inversion is mis-calibrated by ~2×**~~ — **RETRACTED 2026-09-22, see the box below.**
+>    The original text is kept for the record:
+>
+>    **The inversion is mis-calibrated by ~2×, and this IS testable** — the one falsifiable
 >    restriction the monotone-transform argument does not cover, because it concerns *scale*,
 >    not rank. Regressing HL's premium (percent) on Lighter's 8-hour funding gives slope
 >    **0.9900**, so the ×8 conversion and units are right. But a regression-discontinuity
@@ -112,6 +115,46 @@ inversion assumes the formula runs on signed premium, which must be confirmed ag
 >    Pearson gap — the stated inversion injects a discontinuity twice the real size, which is
 >    why 0.8575 falls to 0.8450.
 >
+> ### ✅ F6 RUN AND SETTLED, 2026-09-22 — the ±0.025 correction above is WRONG and is retracted
+>
+> F6 turned out to be runnable today, free, with no recorder: Lighter's public websocket
+> (`wss://mainnet.zklighter.elliot.ai/stream`, channel `market_stats`) serves `premium`,
+> `current_funding_rate`, `base_interest_rate`, `funding_clamp_small` and `funding_clamp_big`
+> **in one message, per market**. One ~25-second snapshot of all 234 markets settles it.
+>
+> Scored forward — feed each market's live premium and interest through
+> `src/fundr/funding/lighter_formula.py` and compare the predicted rate against the venue's own
+> published rate — under the two rival readings. Reproduced independently by the orchestrating
+> session:
+>
+> | reading | crypto (multiplier 100) | equity/RWA (multiplier 50) | disputed band, crypto |
+> |---|---|---|---|
+> | **`clamp_small = 0.05` as the half-band (what the code ships)** | **100/136 exact**, MAE 0.00061 | 62/96, MAE 0.00065 | **10/13 correct** |
+> | `0.025` half-band (the retracted correction) | 89/136, MAE 0.00140 | 63/96, MAE **0.00022** | **0/13 correct** |
+>
+> In the band where the two readings actually disagree the result is 10–0. **The shipped formula
+> is right for every one of the 100 matched pairs**, all of which are multiplier-100 crypto
+> markets, and no change to the inversion is warranted.
+>
+> **Why the regression-discontinuity estimate misled.** It measured the jump in *Hyperliquid's*
+> premium at *Lighter's* baseline crossing — a cross-venue proxy standing in for a venue-specific
+> parameter. There is no reason those two quantities should coincide, and they do not. The
+> forward test uses Lighter's own premium against Lighter's own rate, from the same message, and
+> is decisive where the RD was indirect.
+>
+> **One real finding survives, and it is new.** The multiplier-50 equity/RWA markets fit the
+> *halved* bound better (MAE 0.00022 against 0.00065), which is consistent with the effective
+> clamp scaling with `funding_premium_multiplier` — 0.05 × 1.0 for crypto, 0.05 × 0.5 for
+> multiplier-50. That is exactly the "whether the multiplier matters for RWA/Pre-IPO markets is
+> untested" open issue flagged in `lighter_formula.py`'s docstring. It does not touch Target B
+> (no matched pair is multiplier-50) but it **does** touch Target A's Lighter per-venue view,
+> which spans 96 multiplier-50 markets. Do not apply the crypto-calibrated formula there.
+>
+> Caveat: this scores the venue's *running* rate against a same-instant premium, not settled
+> funding. The 36 crypto misses are small and look like timing skew between the two fields, not a
+> different clamp. A ~3-minute capture across a settlement boundary would close that last gap,
+> also free.
+
 > **So F6 is NOT moot** (as the block above states) — it should be reinstated as a **calibration**
 > check rather than a consistency check. And the interval-bounding argument on the 63.5% fails
 > for an additional reason: the implied interval is a *constant* for every market at base 0.01%,
@@ -322,32 +365,72 @@ timing artifact and was discarded.)
 *primary* target stays "funding spread" or becomes "funding spread net of basis", and Phase 9
 sizes nothing until it is resolved.
 
-> ### Corrected and dialled back, 2026-09-22 after independent review
+> ### Re-measured on the repaired candles, 2026-09-22 — supersedes every number above
 >
-> The concern is legitimate and F2 deserves to exist. Three of the numbers above do not survive,
-> and the framing ("a basis-risk project wearing funding-research clothes") outruns the evidence.
+> The earlier measurements ran on a `lighter_mark_candles` series missing 337,412 bars in
+> ~200-hour blocks. That series is fixed (1,389,772 rows, no internal gaps) and the basis has
+> been re-measured on it: **778,597 concurrent pair-hours across the same 96 symbols**,
+> 2025-08-25 to 2026-09-19, Hyperliquid's last per-minute `mark_px` in the hour against
+> Lighter's hourly mark close. The concern in D6 is still legitimate and F2 still deserves to
+> exist; the size of the concern is now smaller and much better understood.
 >
-> - **The 24h figure is 29.9 bp, not 22.3.** Two sessions independently measured 29.93 bp sd and
->   median |24h drift| **7.58 bp**, hour-close against hour-close, on 564,712 hours. The council's
->   22.3 bp is **not reproducible under any convention tried** (pooled 29.93, per-symbol-sd median
->   17.68, per-symbol-sd mean 29.46, winsorised 17.40). The 17.7%-of-holds figure does reproduce.
-> - **The "genuine persistent basis, lag-1 0.9342" is an artifact of frozen prices.** Hyperliquid's
->   `mark_px` goes stale on delisted markets — AI is frozen at 0.12555 for 99.99% of hours since
->   2025-08-25; MKR 97%, LAUNCHCOIN 84%, AI16Z 81%, YZY 36% — producing basis values to −6,708 bp.
->   **Removing 1,413 rows (0.25%) drops the level sd from 137 bp to 14.6 bp and lag-1 from 0.989
->   to 0.28.** There is no persistent tradeable basis; there is a handful of dead markets.
-> - **The basis mean-reverts, which halves the practical severity.** Drift sd grows 20.4 bp (1h) →
->   29.9 (24h) → 36.5 (72h) → 51.6 (168h): roughly t^0.12, not the t^0.5 of a random walk, which
->   would give ~100 bp at 24h. Most of the "drift" is microstructure noise that **does not
->   compound over a hold**.
-> - **The series it is measured on has a 25% collection hole.** `lighter_mark_candles` was missing
->   337,412 bars in ~200-hour blocks (paging bug, now fixed). The number cannot be tightened until
->   the re-collection lands and stale-price markets are excluded.
+> **Alignment, checked first because it has burned two sessions.** Hour-close against hour-close
+> at zero offset gives level lag-1 **0.9894**; shifting either side by an hour drops it to 0.65.
+> The known artifact reproduces exactly as described — Hyperliquid's hour-*median* against
+> Lighter's hour-*close* gives a 24h drift sd of **98.0 bp** — and is discarded.
 >
-> **The honest statement:** 24-hour basis drift is somewhere in **18–30 bp of standard deviation**
-> with a median absolute move of **7.6 bp**, it is strongly mean-reverting, and it must be
-> re-measured on traded prices and on re-collected candles before it decides anything. That is
-> what F2 already says; the rhetoric above should be read at that strength and no higher.
+> **The headline: 24-hour drift is ~20 bp of standard deviation, not 30.** On the cleaned panel
+> (frozen marks out, each new listing's first 14 days out — 764,264 hours, 94 symbols) drift sd
+> runs **18.4 bp (1h) → 19.4 (6h) → 20.8 (24h) → 23.8 (72h) → 30.2 (168h)**, with median
+> |24h drift| **7.53 bp**. Dropping the two chronic dislocators (XPL, MON) gives 19.2 bp at 24h.
+> **The repair did not produce that improvement — the cleaning did.** Treated the old way, with
+> nothing excluded, the repaired panel gives **38.0 bp** at 24h, *higher* than the 29.9 bp on
+> record, because the extra hours are disproportionately new-listing hours.
+>
+> - **29.9 bp at 24h → superseded.** 20.8 bp cleaned, 38.0 bp unfiltered. Median |24h drift|
+>   **7.58 → 7.53 bp: confirmed**, and it is the stable number here — it barely moves under any
+>   filter, repair or convention.
+> - **The council's 22.3 bp is no longer unreproducible.** The cleaned conventions now span
+>   19.2–21.4 bp pooled and 17.3 bp as the per-symbol-sd median, so 22.3 sits at the edge of the
+>   defensible range rather than outside it. It was still not derived; it is right by coincidence
+>   of convention.
+> - **17.7% of 24h holds exceeding ±18.91 bp: confirmed, and it is remarkably stable** — 17.0% to
+>   18.0% under every filter tried, split almost evenly between the two directions (8.7% / 8.7%).
+> - **The "persistent basis" remains an artifact, but of a different thing.** Unfiltered lag-1
+>   **0.9894** (confirmed). Of the five frozen Hyperliquid markets previously named, only **AI**
+>   is in the concurrent panel at all — MKR, LAUNCHCOIN, AI16Z and YZY never overlap Lighter, so
+>   they never entered this statistic. Excluding frozen marks alone takes level sd from 158 bp to
+>   50.5 bp, not to 14.6. What carries the rest is **XPL and MON**; without them level sd is
+>   **14.9 bp** and lag-1 **0.26** — reproducing the prior figures (14.6 bp, 0.28) through a
+>   different mechanism. Within-symbol persistence is low either way: the per-symbol median lag-1
+>   on the cleaned panel is **0.196**.
+> - **Mean reversion: confirmed and slightly stronger.** Drift sd grows as **t^0.088** on the
+>   cleaned panel (t^0.159 unfiltered), against t^0.5 for a random walk. A random walk from the
+>   1-hour figure would put 24h drift at 90 bp; it is 20.8. Basis risk **does not compound over a
+>   hold**, so lengthening H buys carry without buying proportionate basis risk.
+>
+> **What nobody had checked: the risk is concentrated in newly listed markets, and Phase 3's
+> universe rule steers toward exactly those.** By age of the pair, 24h drift sd and the share of
+> holds exceeding the carry go: first week **90.0 bp / 29.7%**, weeks 2–4 **39.7 bp / 21.8%**,
+> months 1–3 **26.6 bp / 23.1%**, three months and older **17.3 bp / 16.0%**. For markets that
+> actually list inside the window the first week is **146 bp / 56.3%**. XPL's basis averaged
+> +1,747 bp in its first month and MON's +120 to +190 bp for two months, both settling to single
+> digits afterwards. Against that, **BTC/ETH/SOL run a level sd of 7.1 bp, a 24h drift sd of
+> 9.8 bp, and exceed the carry on 5.0% of holds.** This is a universe rule, not a noise term:
+> excluding a market's first month costs 8.6% of the panel and removes most of the tail.
+>
+> **The limitation the repair does not touch.** These are still **mark** prices, and the two
+> venues mark off different references (Hyperliquid oracle, Lighter index), so part of every
+> number above is a convention difference rather than realizable P&L. The realizable figure needs
+> **traded** prices, which are not on disk. Clean candles do not make a mark-based basis a P&L
+> basis, and no number here should be quoted as one.
+>
+> **The honest statement:** 24-hour mark-basis drift has a standard deviation near **20 bp** with
+> a median absolute move of **7.5 bp**; it is strongly mean-reverting and does not compound; it
+> exceeds the widest spread's 24-hour carry on about **17%** of holds, but on **5%** for the
+> majors and on more than half for a market in its first week. It is a real cost that belongs in
+> sizing and in the universe rule, and it is not, on this evidence, large enough to make the
+> funding target the wrong target. Settling that needs traded prices, which is what F2 says.
 
 ---
 

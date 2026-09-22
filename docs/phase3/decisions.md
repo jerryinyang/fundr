@@ -307,3 +307,51 @@ of 100 carry base rate 0.01 (the other 4, AI16Z/MKR/LAUNCHCOIN/YZY, carry 0.0). 
 is not**: the Lighter per-venue view spans 89 markets at base 0.0032 and 96 at multiplier 50.
 **Rule: read each market's own parameters before making any Lighter-wide statement about
 baselines, dead zones or clamps. A statement calibrated on the matched set is wrong outside it.**
+
+---
+
+## Round-turn cost — MEASURED 2026-09-22. The verdict does not flip.
+
+The headline decision above rests on a cost figure the council **assumed** at ~32 bp, against
+measured gross carry of 6.21 bp at 6h and 31.33 bp at 72h. The stated flip condition was: if
+real round-turn cost is **at or below ~6 bp**, the recommendation reverses. Nobody had sourced
+the 32. It is now measured, and the assumption was nearly right by luck.
+
+**Answer: no. Round-turn is ~33 bp at the median non-top-10 name. Zero of 88 such names come in
+at or below 6 bp; the cheapest is 11.2 bp.**
+
+| Component | bp per round turn | Measured or assumed |
+|---|---|---|
+| Hyperliquid taker fee x 2 legs | 9.0 (base tier) | **Measured** - published schedule, cited |
+| Lighter taker fee x 2 legs | **0.0** (Standard account) | **Measured** - schedule + live API |
+| Hyperliquid spread crossed x 2 legs | 10.6 | **Measured** - `impact_bid_px`/`impact_ask_px`, 90-day median |
+| Lighter spread crossed x 2 legs | 14.4 | **Measured** - one live top-of-book snapshot |
+| Funding-settlement slippage | unknown | Not evidenced anywhere; **excluded, not estimated** |
+| **Total, median non-top-10 name** | **~33 bp** | |
+
+Per-symbol spread of the total across 88 matched non-top-10 names: p10 16.0, p25 21.4, median
+33.0, p75 63.8, p90 100.7 bp. The floor across *all* matched names is 9.2 bp (BTC), set almost
+entirely by Hyperliquid's fee.
+
+**Two things this changes.**
+
+1. **A 33 bp round turn does not pay for itself inside three days** against 6.21 bp of carry at
+   6h and 31.33 bp at 72h, on a spread that flips sign every ~2 hours at the median. Any Phase 9
+   sizing work starts from this number, not from the assumption.
+2. **Cost rises monotonically as the size rule bites.** Hyperliquid's median impact spread by
+   open-interest decile, last 90 days: D1 24.96 - D2 17.31 - D3 14.80 - D4 13.96 - D5 8.73 -
+   D6 9.37 - D7 5.89 - D8 4.95 - D9 4.89 - **D10 1.07** bp. The cheap inventory sits entirely in
+   the top decile - **the inventory the "outside the top 10" rule deletes.** This is the same
+   shape as the basis-risk gradient (see the note above Task 5 in the plan): the universe rule
+   systematically steers toward names that are both worse hedged and more expensive to trade.
+   Task 5's F1 measurement must weigh forecastability against *both*.
+
+<=6 bp is reachable only by resting maker on both Hyperliquid legs, or as a top-tier
+(>$7B/14-day) taker, and then only on the handful of names tight on both venues - precisely the
+names the rule removes.
+
+**Caveats, stated:** the Hyperliquid spread is the depth-aware cost to trade a fixed clip
+($20k BTC/ETH, $6k otherwise), so it overstates cost for a smaller clip and understates it for a
+larger one. The Lighter spread is **one instant**, not a distribution - its variation across
+hours and regimes is unmeasured. Funding-settlement slippage is unknown and excluded, so 33 bp is
+a floor on the true figure, not a centre.

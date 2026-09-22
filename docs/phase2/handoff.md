@@ -91,29 +91,37 @@ write it down, and apply it consistently.
 Measured by `scripts/cross_venue_overlap.py`; full report at
 `data/phase2/qa/cross_venue_overlap.md` (regenerate it, do not cite a stale copy).
 
-**The 100 matched symbols in `datasets.md` item 1 are a *lifetime* count** — they say the symbol
-exists on both venues at some point, not that it was ever live on both at once. Target B only
-exists in the concurrent intersection. That intersection is:
+> **Updated 2026-09-22 (Phase 3, Task 4).** Every figure in this section now **includes the five
+> denomination-alias pairs** — `kBONK`/`1000BONK`, `kFLOKI`/`1000FLOKI`, `kPEPE`/`1000PEPE`,
+> `kSHIB`/`1000SHIB`, `NOT`/`1000NOT` — matched through `fundr.alias`. The matched count is
+> **105**, not 100, and the concurrent intersection is **60,951 pair-hours larger**. The
+> denomination factor is **per venue leg, not per pair**: the four `k` markets carry 1000 on both
+> legs, but Hyperliquid lists `NOT` (one token) against Lighter's `1000NOT`. Funding rates are
+> unaffected; prices, sizes and notionals are not.
 
-- **100 of 100** matched pairs have at least one concurrent hour, so the lifetime count happens
+**The matched symbols counted in `datasets.md` item 1 are a *lifetime* count** — they say the
+symbol exists on both venues at some point, not that it was ever live on both at once. Target B
+only exists in the concurrent intersection. That intersection is:
+
+- **105 of 105** matched pairs have at least one concurrent hour, so the lifetime count happens
   not to overstate the pair count here.
-- **97 pairs** have ≥ 720 concurrent hours (30 days); **94 pairs** have ≥ 2,160 (90 days).
-- **978,572 concurrent pair-hours** in total; median 9,822 hours per pair.
+- **102 pairs** have ≥ 720 concurrent hours (30 days); **99 pairs** have ≥ 2,160 (90 days).
+- **1,039,523 concurrent pair-hours** in total; median 9,882 hours per pair.
 - The window runs **2025-01-17 08:00Z → 2026-09-21 21:00Z**, and every one of its 14,702 hours
   has at least one live pair.
 
-**But the window does not start wide — it grows.** This is the part a naive "we have 100 pairs
+**But the window does not start wide — it grows.** This is the part a naive "we have 105 pairs
 since 2025-01" assumption gets wrong:
 
 | Milestone | First reached |
 |---|---|
 | ≥ 10 pairs live | 2025-01-17 08:00Z (the first hour) |
-| ≥ 25 pairs live | 2025-03-05 17:00Z |
+| ≥ 25 pairs live | 2025-02-24 21:00Z |
 | ≥ 50 pairs live | 2025-07-29 18:00Z |
-| ≥ 75 pairs live | 2025-10-08 11:00Z |
-| peak | 96 pairs |
+| ≥ 75 pairs live | 2025-09-24 16:00Z |
+| peak | 101 pairs |
 
-Median live pairs per month: 13 in 2025-01, 35 in 2025-05, 66 in 2025-09, 85 in 2026-01, 96 in
+Median live pairs per month: 14 in 2025-01, 39 in 2025-05, 70 in 2025-09, 89 in 2026-01, 101 in
 2026-09. **A cross-sectional model trained on the whole window is trained on a cross-section
 that grows sevenfold through it.** Either weight by it, or start the panel later and say so.
 
@@ -121,28 +129,29 @@ that grows sevenfold through it.** Either weight by it, or start the panel later
 
 | symbol | shared_hours | first_shared | last_shared | density |
 |---|---|---|---|---|
-| XRP | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
-| DOGE | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
-| WLD | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
-| BTC | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
-| POL | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
-| TAO | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
 | SOL | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
+| DOGE | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
+| TAO | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
+| WLD | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
 | NEAR | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
-| DOT | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
 | LINK | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
 | ETH | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
-| WIF | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
 | AVAX | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
+| XRP | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
+| BTC | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
+| DOT | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
+| WIF | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
+| kPEPE | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
+| POL | 14702 | 2025-01-17 08:00 | 2026-09-21 21:00 | 1.0 |
 | TRUMP | 14380 | 2025-01-30 18:00 | 2026-09-21 21:00 | 1.0 |
+| kSHIB | 14352 | 2025-01-31 22:00 | 2026-09-21 21:00 | 1.0 |
 | SUI | 14352 | 2025-01-31 22:00 | 2026-09-21 21:00 | 1.0 |
-| FARTCOIN | 13996 | 2025-02-15 18:00 | 2026-09-21 21:00 | 1.0 |
+| kBONK | 14352 | 2025-01-31 22:00 | 2026-09-21 21:00 | 1.0 |
+| kFLOKI | 14352 | 2025-01-31 22:00 | 2026-09-21 21:00 | 1.0 |
 | POPCAT | 13996 | 2025-02-15 18:00 | 2026-09-21 21:00 | 1.0 |
-| BERA | 13996 | 2025-02-15 18:00 | 2026-09-21 21:00 | 1.0 |
-| HYPE | 13777 | 2025-02-24 21:00 | 2026-09-21 21:00 | 1.0 |
-| JUP | 13777 | 2025-02-24 21:00 | 2026-09-21 21:00 | 1.0 |
 
-Every pair in the top 20 has density 1.0 — their concurrent history has no holes in it.
+Every pair in the top 20 has density 1.0 — their concurrent history has no holes in it. Symbols
+are the canonical (Hyperliquid) name, so `kPEPE` here is Lighter's `1000PEPE`.
 
 ### How much survives the top-10 exclusion
 
@@ -150,20 +159,21 @@ Ranked per hour on HL open-interest notional, point-in-time:
 
 | Pool the top 10 is drawn from | Pairs never in the top 10 | Pairs always in it | Surviving pair-hours |
 |---|---|---|---|
-| Every HL market live that hour | **63** of 100 | 5 | 843,692 of 978,572 (86%) |
-| The matched pairs only | **61** of 100 | 5 | 833,372 of 978,572 (85%) |
+| Every HL market live that hour | **66** of 105 | 5 | 899,694 of 1,039,523 (87%) |
+| The matched pairs only | **66** of 105 | 5 | 894,323 of 1,039,523 (86%) |
 
 The five always-excluded pairs are the same under both readings: **BTC, ETH, SOL, XRP, HYPE**.
-The rest of the difference is churn — 27–28 pairs cross in and out of the top 10 for under half
+The rest of the difference is churn — 28–29 pairs cross in and out of the top 10 for under half
 their hours, so **membership must be evaluated per hour, not once per symbol.** Pairs that spend
 a large minority of their time in the top 10 (ZEC 0.94, LIT 0.73, PUMP 0.65, ASTER 0.58,
-FARTCOIN 0.47, DOGE 0.39) are exactly where a once-per-symbol shortcut would do the most damage.
+FARTCOIN 0.47, DOGE 0.39, kPEPE 0.30) are exactly where a once-per-symbol shortcut would do the
+most damage.
 
-**Planning number: roughly 60–65 pairs are in the Target B universe unconditionally, ~85% of
-concurrent pair-hours survive the exclusion, and about 90 pairs are in it for at least part of
-their history.**
+**Planning number: roughly 66 pairs are in the Target B universe unconditionally — the same
+count under both pools now — ~86% of concurrent pair-hours survive the exclusion, and about 95
+pairs are in it for at least part of their history.**
 
-Caveat on that number: 17,156 of the 978,572 pair-hours (1.8%) have no HL open-interest row to
+Caveat on that number: 18,066 of the 1,039,523 pair-hours (1.7%) have no HL open-interest row to
 rank against, because of archive short days (§4). They are counted as surviving. Treating them
 the other way moves the totals by under two percent.
 
