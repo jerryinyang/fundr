@@ -237,8 +237,9 @@ def lighter_clamp(funding_clamp_big_pct: pl.Expr) -> pl.Expr:
     every one of the 100 matched pairs, ceiling **5.0e-3** -- but 16.0 on RIVER, 20.0 on ARC,
     0.02 on five Korean equities and 0.0 on MKR.
 
-    **Seven markets breach their published ceiling and none of them is a matched pair**: the five
-    Korean equities plus HANMI observe rates up to 0.5%/h against a published 0.0025%/h, and MKR
+    **Six markets breach their published ceiling and none of them is a matched pair**: the five
+    Korean equities (SAMSUNG, HYUNDAI, KRCOMP, SKHYNIX, HANMI) observe rates up to 0.5%/h
+    against a published 0.0025%/h, and MKR
     reaches 0.0636%/h against a published clamp of 0. Those parameters are wrong or differently
     scaled -- consistent with the multiplier-50 equity/RWA finding in `docs/phase4/decisions.md`
     -- so a later phase applying this to Target A's Lighter per-venue view cannot trust the
