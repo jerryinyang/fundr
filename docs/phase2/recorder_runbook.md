@@ -16,7 +16,7 @@ instance was provisioned; rewritten the same day when the recorder was **moved f
 | Security group | `sg-0eb3c8047f99b3d53` (`fundr-recorder-sg`) in `vpc-0a0077d7fa120ac58` |
 | Key pair | `fundr-recorder-eu` (`key-0d0cbb8e9ff8a56c2`, ed25519) |
 | Private key | `/Users/jerryinyang/Trading/fundr/auth/fundr-recorder-eu.pem`, mode 0600 — `auth/` is gitignored |
-| S3 bucket | `fundr-recorder-801242831140-us-east-1` — private, versioned, **still in `us-east-1`**; lifecycle: noncurrent expire 7 d, current → IA 90 d |
+| S3 bucket | `fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1` — private, versioned, **still in `us-east-1`**; lifecycle: noncurrent expire 7 d, current → IA 90 d |
 | Tags | `Project=fundr`, `Component=recorder` on instance, volume, security group and key pair |
 | Code on the box | `/opt/fundr`, owned by the `fundr` system user |
 | Data on the box | `/var/lib/fundr` |
@@ -89,7 +89,7 @@ restrictions ever extend to the EU, the answer is to stop and re-decide, not to 
 
 ### The us-east-1 partial recording is preserved
 
-`s3://fundr-recorder-801242831140-us-east-1/recorder/us-east-1-partial/` holds the old instance's
+`s3://fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1/recorder/us-east-1-partial/` holds the old instance's
 entire `/var/lib/fundr` as it stood at termination — Hyperliquid and universe data for hours 10–12
 of 2026-09-21, plus `health.json` and the Lighter gap records that are the evidence of the block.
 
@@ -330,21 +330,21 @@ it must be done by an account administrator (or by granting `iam:*` to `xeno-adm
    - the managed policy `arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore` (this is what
      enables Session Manager), and
    - an inline policy allowing `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` and `s3:HeadObject`
-     on `arn:aws:s3:::fundr-recorder-801242831140-us-east-1` and
-     `arn:aws:s3:::fundr-recorder-801242831140-us-east-1/*` **and nothing else**. An over-broad
+     on `arn:aws:s3:::fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1` and
+     `arn:aws:s3:::fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1/*` **and nothing else**. An over-broad
      policy here is the single credential on the instance; keep it to the one bucket.
    IAM is global, so the role works for a `eu-central-1` instance unchanged.
 2. **Create the instance profile** of the same name, add the role to it, and associate it with
    `i-02348231aa3d6e4bf` (`ec2:AssociateIamInstanceProfile`, region `eu-central-1`). No restart or
    redeploy is needed; the instance picks the credentials up from IMDS within a minute or two.
-3. **Turn uploads on**: set `FUNDR_BUCKET=fundr-recorder-801242831140-us-east-1` in
+3. **Turn uploads on**: set `FUNDR_BUCKET=fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1` in
    `/etc/fundr/recorder.env` and `sudo systemctl restart fundr-recorder fundr-upload.timer`. The
    next timer firing backfills everything still on disk — the upload manifest is idempotent and
    local pruning is confirmed-only, so nothing is lost or duplicated. Confirm with:
    ```bash
    uv run python -c "
    import boto3
-   r = boto3.client('s3').list_objects_v2(Bucket='fundr-recorder-801242831140-us-east-1',
+   r = boto3.client('s3').list_objects_v2(Bucket='fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1',
                                           Prefix='recorder/v1/')
    print(r['KeyCount'], [o['Key'] for o in r.get('Contents', [])][:10])"
    ```
@@ -359,7 +359,7 @@ no inbound ports and no private key on the operator's laptop.
 
 ## Prior art in the bucket
 
-- `s3://fundr-recorder-801242831140-us-east-1/phase1/p09/live_2026-09-19.jsonl` — the Phase 1
+- `s3://fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1/phase1/p09/live_2026-09-19.jsonl` — the Phase 1
   Lighter premium recording, the only copy of that history in existence. **Do not delete it.**
-- `s3://fundr-recorder-801242831140-us-east-1/recorder/us-east-1-partial/` — the terminated
+- `s3://fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1/recorder/us-east-1-partial/` — the terminated
   us-east-1 instance's recording, preserved at decommission. See *Why Frankfurt*.

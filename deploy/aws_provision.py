@@ -63,7 +63,7 @@ VOLUME_GB = 8
 VOLUME_TYPE = "gp3"
 AMI_SSM_PARAMETER = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64"
 AMI_NAME_GLOB = "al2023-ami-2023.*-kernel-6.1-arm64"
-BUCKET = "fundr-recorder-801242831140-us-east-1"
+BUCKET = "fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1"
 
 TAGS = {"Project": "fundr", "Component": "recorder"}
 TAG_LIST = [{"Key": k, "Value": v} for k, v in TAGS.items()]

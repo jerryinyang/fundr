@@ -246,7 +246,7 @@ an account administrator has to do it. Full steps in
 
 1. Create role `fundr-recorder-role` (trust `ec2.amazonaws.com`) with
    `AmazonSSMManagedInstanceCore` plus an inline policy scoped to the one bucket
-   `fundr-recorder-801242831140-us-east-1` and **nothing else** — this is the only credential on
+   `fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1` and **nothing else** — this is the only credential on
    the instance.
 2. Create the matching instance profile and associate it with the instance. No restart needed.
 3. Set `FUNDR_BUCKET` in `/etc/fundr/recorder.env` and restart; the next timer firing backfills

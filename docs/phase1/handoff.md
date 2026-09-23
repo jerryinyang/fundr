@@ -508,7 +508,7 @@ formula case files.
 
 1. ~~**Back up `data/phase1/p09/live.jsonl` off this machine** (cloud storage or a second disk).~~
    **Done.** It is in S3 at
-   `s3://fundr-recorder-801242831140-us-east-1/phase1/p09/live_2026-09-19.jsonl`, 5,557,972 bytes,
+   `s3://fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1/phase1/p09/live_2026-09-19.jsonl`, 5,557,972 bytes,
    verified against the local copy. It is the only Lighter premium history in existence and
    Lighter's formula confirmation depends on it; the pre-existing `_backup/` copy was on the same
    disk and did not discharge this on its own. See the recorder runbook's "Prior art in the

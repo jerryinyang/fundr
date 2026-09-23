@@ -394,11 +394,11 @@ administrator does this on the user's behalf):
 
 1. Create role `fundr-recorder-role` trusted by `ec2.amazonaws.com`, with an inline policy
    allowing `s3:PutObject`, `s3:GetObject`, `s3:ListBucket` and `s3:HeadObject` on
-   `arn:aws:s3:::fundr-recorder-801242831140-us-east-1` and `.../*` **only**, plus the managed
+   `arn:aws:s3:::fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1` and `.../*` **only**, plus the managed
    policy `arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore`.
 2. Create the matching instance profile and associate it with the running instance
    (`ec2:AssociateIamInstanceProfile` — no restart or redeploy needed).
-3. Set `FUNDR_BUCKET=fundr-recorder-801242831140-us-east-1` in `/etc/fundr/recorder.env` and
+3. Set `FUNDR_BUCKET=fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1` in `/etc/fundr/recorder.env` and
    `systemctl restart fundr-upload.timer`; the next firing backfills everything still on disk,
    because the upload manifest is idempotent and pruning is confirmed-only.
 4. Revoke the inbound TCP 22 rule from `fundr-recorder-sg` once a Session Manager shell is
@@ -437,7 +437,7 @@ carries a per-region rate table so `plan` prints the right number.
 
 **The us-east-1 partial recording is preserved.** Before the old instance was terminated its
 `/var/lib/fundr` was copied to
-`s3://fundr-recorder-801242831140-us-east-1/recorder/us-east-1-partial/` — ~2.6 hours of
+`s3://fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1/recorder/us-east-1-partial/` — ~2.6 hours of
 Hyperliquid and universe data (plus the geo-blocked Lighter gap records, kept as the evidence of
 the block). It is a separate prefix from `recorder/v1/`, carries a different instance id in every
 filename and record, and must not be concatenated with the Frankfurt recording without accounting
@@ -449,7 +449,7 @@ one /32 (with a new per-region key pair, `fundr-recorder-eu`, private key at
 `auth/fundr-recorder-eu.pem`, gitignored, mode 0600), and `FUNDR_BUCKET` is still empty — the
 recording still lives only on the instance's EBS volume. The revert procedure above applies
 unchanged, except that the bucket
-(`fundr-recorder-801242831140-us-east-1`) is in `us-east-1` while the instance is in
+(`fundr-recorder-<AWS_ACCOUNT_ID>-us-east-1`) is in `us-east-1` while the instance is in
 `eu-central-1`; that is fine for S3 (cross-region access is a data-transfer charge, not a
 permission problem) and adds roughly $0.02/GB egress to the upload cost once uploads are enabled.
 
